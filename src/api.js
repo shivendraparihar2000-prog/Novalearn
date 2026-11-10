@@ -4,7 +4,48 @@
 // Backend URL: set VITE_API_URL in frontend/.env (default http://localhost:5000/api).
 // The backend's CORS_ORIGINS must include the origin Vite serves from (default http://localhost:5173).
 
-const BASE = (import.meta.env.VITE_API_URL || 'http://localhost:5000/api').replace(/\/$/, '');
+/**
+ * Resolves the backend API base URL with fail-closed production safety.
+ *
+ * In production:
+ * - VITE_API_URL must be explicitly configured.
+ * - Silent fallback to localhost is strictly prohibited.
+ * - Missing VITE_API_URL produces a clear configuration error.
+ *
+ * In development / test:
+ * - Falls back safely to 'http://localhost:5000/api'.
+ * - Trailing slashes are normalized.
+ */
+export function resolveApiBaseUrl(env = (typeof import.meta !== 'undefined' && import.meta?.env) ? import.meta.env : {}) {
+  const isProd = Boolean(env.PROD || env.MODE === 'production');
+  const rawUrl = env.VITE_API_URL;
+
+  if (isProd) {
+    if (!rawUrl || typeof rawUrl !== 'string' || !rawUrl.trim()) {
+      throw new Error('Configuration error: VITE_API_URL must be explicitly defined in production environment.');
+    }
+    return rawUrl.trim().replace(/\/+$/, '');
+  }
+
+  const fallback = (rawUrl && typeof rawUrl === 'string' && rawUrl.trim()) ? rawUrl.trim() : 'http://localhost:5000/api';
+  return fallback.replace(/\/+$/, '');
+}
+
+let resolvedBaseUrl;
+let baseConfigError = null;
+try {
+  resolvedBaseUrl = resolveApiBaseUrl();
+} catch (err) {
+  baseConfigError = err.message;
+}
+
+export function getBaseUrl() {
+  if (baseConfigError) {
+    throw new ApiError(0, 'configuration_error', baseConfigError);
+  }
+  return resolvedBaseUrl;
+}
+
 const KEY = 'learnmate.session';
 
 /* ---------- session (JWT + user) ---------- */
@@ -34,7 +75,8 @@ async function request(path, { method = 'GET', body, auth = true } = {}) {
 
   let res;
   try {
-    res = await fetch(BASE + path, { method, headers, body: body !== undefined ? JSON.stringify(body) : undefined });
+    const base = getBaseUrl();
+    res = await fetch(base + path, { method, headers, body: body !== undefined ? JSON.stringify(body) : undefined });
   } catch {
     throw new ApiError(0, 'network_error', 'Cannot reach the server. Is the backend running?');
   }
@@ -76,7 +118,67 @@ export const submitQuiz = (courseId, answers, seconds = 0) =>
 export const getRecommendations = () => request('/recommendations');
 export const refreshRecommendations = () => request('/recommendations/refresh', { method: 'POST' });
 export const getProfile = async () => (await request('/profile')).profile;
+export const updateProfile = async (profile) => (await request('/profile', { method: 'PATCH', body: profile })).profile;
+export const getProfileTopics = async () => (await request('/profile/topics')).topics;
+export const getKnowledgeProfile = () => request('/profile/knowledge?per_page=20');
 export const getProgress = () => request('/progress?per_page=50'); // backend caps per_page at 50
+export const getOnboarding = () => request('/onboarding');
+export const getOnboardingStatus = () => request('/onboarding/status');
+export const saveEducation = (education_category, school_grade) => request('/onboarding/education',{method:'POST',body:{education_category,school_grade}});
+export const completeOnboarding = () => request('/onboarding/complete',{method:'POST',body:{}});
+export const inviteGuardian = (guardian_email) => request('/guardian/invitations',{method:'POST',body:{guardian_email}});
+export const getLearningRecommendations = ({ subject, category } = {}) => {
+  const params = new URLSearchParams();
+  if (subject) params.append('subject', subject);
+  if (category) params.append('category', category);
+  const q = params.toString();
+  return request(`/recommendations/learning${q ? '?' + q : ''}`);
+};
+export const getKnowledgeCoverage = () => request('/profile/knowledge/coverage');
+export const getKnowledgeHistory = (topicId) => request(`/profile/knowledge/topics/${topicId}/history`);
+
+/* ---------- Phase 5B: Focus Mode & NovaBreak ---------- */
+export const startFocusSession = (journeyId = null, activityId = null, customIntervalMinutes = null) =>
+  request('/focus/sessions', { method: 'POST', body: { journey_id: journeyId, activity_id: activityId, custom_interval_minutes: customIntervalMinutes } });
+export const getCurrentFocusSession = () => request('/focus/sessions/current');
+export const startNovaBreak = (sessionId) => request(`/focus/sessions/${sessionId}/break/start`, { method: 'POST' });
+export const endNovaBreak = (sessionId) => request(`/focus/sessions/${sessionId}/break/end`, { method: 'POST' });
+export const heartbeatFocusSession = (sessionId, studySeconds = null) =>
+  request(`/focus/sessions/${sessionId}/heartbeat`, { method: 'POST', body: { study_duration_seconds: studySeconds } });
+export const completeFocusSession = (sessionId) => request(`/focus/sessions/${sessionId}/complete`, { method: 'POST' });
+export const abandonFocusSession = (sessionId) => request(`/focus/sessions/${sessionId}/abandon`, { method: 'POST' });
+
+/* ---------- Phase 5C: Guardian Experience & Reporting ---------- */
+export const getGuardianLearners = () => request('/guardian/learners');
+export const getGuardianLearnerSummary = (learnerId) => request(`/guardian/learners/${learnerId}/summary`);
+export const getGuardianLearnerReports = (learnerId) => request(`/guardian/learners/${learnerId}/reports`);
+export const generateGuardianReport = (learnerId) => request(`/guardian/learners/${learnerId}/reports/generate`, { method: 'POST' });
+export const sendGuardianReport = (learnerId, reportId) => request(`/guardian/learners/${learnerId}/reports/${reportId}/send`, { method: 'POST' });
+export const startDiagnostic = () => request('/diagnostic/sessions', { method: 'POST', body: {} });
+export const getDiagnosticSession = (sessionId) => request(`/diagnostic/sessions/${sessionId}`);
+export const getNextDiagnosticQuestion = (sessionId) => request(`/diagnostic/sessions/${sessionId}/next`);
+export const submitDiagnosticAnswer = (sessionId, sessionQuestionId, selectedAnswerIndex) =>
+  request(`/diagnostic/sessions/${sessionId}/answers`, { method: 'POST', body: { session_question_id: sessionQuestionId, selected_answer_index: selectedAnswerIndex } });
+export const createLearningJourney = (body = {}) => request('/learning-journeys', { method: 'POST', body });
+export const listLearningJourneys = () => request('/learning-journeys');
+export const getLearningJourney = (journeyId) => request(`/learning-journeys/${journeyId}`);
+export const getLearningJourneyVersions = (journeyId) => request(`/learning-journeys/${journeyId}/versions`);
+export const adaptLearningJourney = (journeyId, adaptationReason = 'learner_progress_adaptation') =>
+  request(`/learning-journeys/${journeyId}/adapt`, { method: 'POST', body: { adaptation_reason: adaptationReason } });
+export const getJourneyProgress = (journeyId) => request(`/learning-journeys/${journeyId}/progress`);
+export const startJourneyActivity = (journeyId, activityId) =>
+  request(`/learning-journeys/${journeyId}/activities/${activityId}/start`, { method: 'POST' });
+export const updateVideoPlayback = (journeyId, activityId, playbackData) =>
+  request(`/learning-journeys/${journeyId}/activities/${activityId}/video-playback`, { method: 'POST', body: playbackData });
+export const completeJourneyActivity = (journeyId, activityId, completionData = {}) =>
+  request(`/learning-journeys/${journeyId}/activities/${activityId}/complete`, { method: 'POST', body: completionData });
+export const getMilestoneAssessment = (journeyId, stepId) =>
+  request(`/learning-journeys/${journeyId}/steps/${stepId}/milestone-assessment`);
+export const submitMilestoneAssessment = (journeyId, stepId, submission) =>
+  request(`/learning-journeys/${journeyId}/steps/${stepId}/milestone-assessment/submit`, { method: 'POST', body: submission });
+export const getMilestoneResults = (journeyId, stepId) =>
+  request(`/learning-journeys/${journeyId}/steps/${stepId}/milestone-assessment/results`);
+
 
 export async function fetchAllCourses() {
   const out = [];

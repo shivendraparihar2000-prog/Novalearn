@@ -1,5 +1,7 @@
-import React, { Suspense, createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
+import React, { Suspense, createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import * as api from './api.js';
+import { useBrowserNavigation } from './useBrowserNavigation.js';
+import { loadYouTubeIFrameAPI, createYouTubePlayerController } from './youtubePlayerController.js';
 import { GoogleLogin, GoogleOAuthProvider } from '@react-oauth/google';
 import { Canvas } from '@react-three/fiber';
 import { Float, OrbitControls, Stars } from '@react-three/drei';
@@ -7,9 +9,10 @@ import {
   Activity, ArrowDownRight, ArrowLeft, ArrowRight, ArrowUpRight, Atom, Award,
   BarChart3, Bell, BookOpen, Bookmark, Brain, Check, CheckCircle2, ChevronDown,
   ChevronRight, CircleHelp, Clock3, Compass, Flame, GraduationCap, Headphones,
-  Home, Lightbulb, LockKeyhole, LogIn, Mail, Menu, MessageCircle, Play, Plus,
-  Search, Settings2, ShieldCheck, Sparkles, Star, Target, TrendingUp, Trophy,
-  UserRound, Users, X, Zap, Filter, SlidersHorizontal, Eye, EyeOff, ChartNoAxesCombined
+  Home, Lightbulb, LockKeyhole, LogIn, Mail, Menu, MessageCircle, Pause, Play, Plus,
+  RefreshCw, Search, Settings2, ShieldCheck, Sparkles, Star, Target, TrendingUp, Trophy,
+  UserRound, Users, X, Zap, Filter, SlidersHorizontal, Eye, EyeOff, ChartNoAxesCombined,
+  Timer, Coffee, FileText, Send, AlertCircle, Heart
 } from 'lucide-react';
 import {
   Area, AreaChart, Bar, BarChart, CartesianGrid, Cell, Line, LineChart,
@@ -19,9 +22,9 @@ const clientId = import.meta.env.VITE_GOOGLE_CLIENT_ID;
 console.log("Google Client ID loaded:", clientId);
 const nav = [
   ['Home', Home], ['Explore', Compass], ['My Learning', BookOpen],
-  ['Recommendations', Sparkles], ['Progress', TrendingUp], ['Profile', UserRound]
+  ['Recommendations', Sparkles], ['Journey', GraduationCap], ['Focus Mode', Timer], ['Diagnostic', Brain], ['Progress', TrendingUp], ['Profile', UserRound]
 ];
-const pages = ['Landing Page','Sign Up / Login','Student Dashboard','Explore Courses','Course / Learning View','Quiz / Assessment','Learner Profile','Recommendations','Progress Analytics','How It Works / About'];
+const pages = ['Landing Page','Sign Up / Login','Student Dashboard','Explore Courses','Course / Learning View','Quiz / Assessment','Learner Profile','Recommendations','Learning Journey','Progress Analytics','Focus Mode','Guardian Dashboard','How It Works / About'];
 const sampleResources = [
   {id:1,title:'Python Fundamentals: Think in Code',topic:'Programming',level:'Beginner',duration:'24 min',type:'Interactive lesson',match:98,icon:'{ }',tone:'violet',why:'Matches your goal and your recent quiz results.'},
   {id:2,title:'Visualising Data with Python',topic:'Data Science',level:'Intermediate',duration:'32 min',type:'Video lesson',match:94,icon:'◒',tone:'mint',why:'Builds on your strong Python foundations.'},
@@ -44,7 +47,7 @@ const sampleTopics = [
 
 sampleTopics.forEach((t,i)=>{t.icon=['Py','SQL','∑','⌘','DS'][i];});
 // Shared app data. Guests see the sample data above; signed-in learners see live data from the backend.
-const DataCtx = createContext({courses:sampleResources,recs:sampleResources,topics:sampleTopics,stats:null,profile:null,user:null,recMeta:null,recError:'',history:[]});
+const DataCtx = createContext({courses:sampleResources,recs:sampleResources,topics:sampleTopics,stats:null,profile:null,knowledge:null,user:null,recMeta:null,recError:'',history:[]});
 const useData = () => useContext(DataCtx);
 const initialOf = user => (user?.username||'Guest').charAt(0).toUpperCase();
 function Brand({light=false}) {
@@ -108,10 +111,11 @@ function LearningMap({onTopic}) {
 }
 function Sidebar({page,setPage,collapsed,setCollapsed}) {
   const {user,recs,stats,signOut,openAuth}=useData();
+  const guardianNav = user?.role === 'guardian' ? [['Guardian Dashboard', ShieldCheck]] : [];
   return <aside className={`sidebar ${collapsed?'sidebar-collapsed':''}`}>
     <div className="side-top"><Brand/><button className="icon-btn sidebar-toggle" onClick={()=>setCollapsed(!collapsed)} aria-label="Toggle sidebar"><Menu size={18}/></button></div>
     <div className="side-section-label">WORKSPACE</div>
-    <nav className="side-nav">{nav.map(([label,Icon])=><button key={label} className={`side-link ${page===label?'active':''}`} onClick={()=>setPage(label)} title={label}><Icon size={18}/><span>{label}</span>{label==='Recommendations'&&<span className="nav-count">{recs.length}</span>}</button>)}</nav>
+    <nav className="side-nav">{[...nav,...guardianNav].map(([label,Icon])=><button key={label} className={`side-link ${page===label?'active':''}`} onClick={()=>setPage(label)} title={label}><Icon size={18}/><span>{label}</span>{label==='Recommendations'&&<span className="nav-count">{recs.length}</span>}</button>)}</nav>
     <div className="sidebar-bottom"><div className="streak-card"><div className="streak-icon"><Flame size={17}/></div><div><b>{stats?stats.streak:6} day streak</b><small>{stats&&stats.streak===0?'Start a session today':"You're on a roll!"}</small></div><ArrowUpRight size={15}/></div><div className="side-profile" role="button" tabIndex={0} style={{cursor:'pointer'}} title={user?'Sign out':'Sign in'} onClick={user?signOut:openAuth}><div className="avatar">{initialOf(user)}</div><div className="profile-text"><b>{user?user.username:'Guest'}</b><small>{user?'Click to sign out':'Click to sign in'}</small></div><ChevronDown size={15}/></div></div>
   </aside>;
 }
@@ -185,7 +189,7 @@ function Auth({setPage}) {
   const {signIn,signUp,signInWithGoogle}=useData();
   async function submit(e){e.preventDefault();if(busy)return;if(signup&&!fullName.trim())return setError('Enter your full name.');if(!email.includes('@'))return setError('Enter a valid email address.');if(password.length<8)return setError('Password must be at least 8 characters.');
     setBusy(true);setError('');
-    try{if(signup)await signUp({fullName,email,password});else await signIn({email,password});setPage('Student Dashboard');}
+    try{if(signup){await signUp({fullName,email,password});setPage('Onboarding');}else{await signIn({email,password});setPage('Student Dashboard');}}
     catch(err){setError(err.message);setBusy(false);}
   }
   const circuitPaths=[
@@ -245,13 +249,87 @@ function Auth({setPage}) {
     <div className="auth-bottom-caption"><span className="auth-status-dot"/> A learning space built around you</div>
   </div>;
 }
+function Onboarding({setPage}) {
+  const [category,setCategory]=useState(''),[grade,setGrade]=useState(''),[email,setEmail]=useState(''),[status,setStatus]=useState(''),[busy,setBusy]=useState(false),[initialLoading,setInitialLoading]=useState(true);
+  const school=category.startsWith('class_'); const required=category==='class_1_8'||category==='class_9_10'; const optional=category==='class_11_12';
+
+  useEffect(() => {
+    let active = true;
+    api.getOnboardingStatus().then(st => {
+      if (!active) return;
+      if (st.education_category) {
+        setCategory(st.education_category);
+        if (st.school_grade) setGrade(String(st.school_grade));
+      }
+      if (st.next_step === 'dashboard') {
+        setPage('Student Dashboard');
+      } else if (st.next_step === 'diagnostic') {
+        setStatus('Education category confirmed. You can now take a quick diagnostic to find your starting point.');
+      } else if (st.guardian_policy === 'required' && !st.guardian_linked) {
+        setStatus('A verified guardian invitation is required before onboarding can finish.');
+      }
+    }).catch(() => {}).finally(() => {
+      if (active) setInitialLoading(false);
+    });
+    return () => { active = false; };
+  }, [setPage]);
+
+  async function continueFlow(e){e.preventDefault();setBusy(true);setStatus('');try{await api.saveEducation(category,school?Number(grade):null);if(required||optional){setStatus(required?'A verified guardian invitation is required before onboarding can finish.':'You may invite a guardian now or continue independently.');}else setPage('Student Dashboard');}catch(err){setStatus(err.message)}finally{setBusy(false)}}
+  async function sendInvite(){try{await api.inviteGuardian(email);setStatus('A secure invitation was sent. Your guardian must use the email link to create or sign in to their own account.')}catch(err){setStatus(err.message)}}
+  async function continueIndependently(){setBusy(true);setStatus('');try{await api.completeOnboarding();setPage('Student Dashboard')}catch(err){setStatus(err.message)}finally{setBusy(false)}}
+  if (initialLoading) {
+    return <div className="page-content"><section className="panel" style={{maxWidth:650,margin:'40px auto',padding:32,textAlign:'center'}}><p className="muted">Loading onboarding status…</p></section></div>;
+  }
+  return <div className="page-content"><section className="panel" style={{maxWidth:650,margin:'40px auto',padding:32}}><div className="eyebrow">SET UP YOUR LEARNING SPACE</div><h2>Tell us where you are learning.</h2><p className="muted">This helps us apply the right account and guardian options. You can continue later.</p><form onSubmit={continueFlow} className="auth-form"><label>Education category<select value={category} onChange={e=>{setCategory(e.target.value);setGrade('')}} required><option value="">Choose one</option><option value="class_1_8">Classes 1–8</option><option value="class_9_10">Classes 9–10</option><option value="class_11_12">Classes 11–12</option><option value="university">University student</option><option value="independent">Independent learner</option></select></label>{school&&<label>Class / grade<select value={grade} onChange={e=>setGrade(e.target.value)} required><option value="">Choose grade</option>{Array.from({length:category==='class_1_8'?8:category==='class_9_10'?2:2},(_,i)=>{const n=(category==='class_1_8'?1:category==='class_9_10'?9:11)+i;return <option key={n} value={n}>{n}</option>})}</select></label>}<Button block disabled={busy||!category||(school&&!grade)}>{busy?'Saving…':'Continue'} <ArrowRight size={15}/></Button></form>{(required||optional)&&status&&<div className="panel" style={{marginTop:18,padding:16}}><p>{status}</p><label>Guardian email<input type="email" value={email} onChange={e=>setEmail(e.target.value)} placeholder="guardian@example.com"/></label><Button kind="soft" onClick={sendInvite} disabled={!email}>Send secure invitation</Button>{optional&&<Button kind="outline" onClick={continueIndependently} disabled={busy}>Continue independently</Button>}</div>}</section></div>;
+}
 function Dashboard({setPage,onOpen,onTopic}) {
-  const {recs:resources,courses,stats,user}=useData();
+  const {recs:resources,courses,stats,user,profile}=useData();
+  const [activeJourney, setActiveJourney] = useState(null);
+  const [journeyProgress, setJourneyProgress] = useState(null);
+
+  useEffect(() => {
+    if (!user) return;
+    let live = true;
+    api.listLearningJourneys().then(r => {
+      if (!live) return;
+      const current = r.journeys?.find(j => j.status === 'in_progress') || r.journeys?.[0];
+      if (current) {
+        setActiveJourney(current);
+        api.getJourneyProgress(current.id).then(pr => {
+          if (live) setJourneyProgress(pr.progress);
+        }).catch(() => {});
+      }
+    }).catch(() => {});
+    return () => { live = false; };
+  }, [user]);
+
   const top=resources[0]||(user?courses[0]:null)||sampleResources[0];
   const hour=new Date().getHours(),part=hour<12?'morning':hour<18?'afternoon':'evening';
-  return <><div className="welcome-row"><div><div className="eyebrow">{new Date().toLocaleDateString('en-US',{weekday:'long',month:'long',day:'numeric'}).toUpperCase()}</div><h1>Good {part}, {user?user.username.replace(/_\d{4}$/,'').replace(/_/g,' '):'learner'} <span className="wave">✦</span></h1><p>Every step counts. Let's make today's a good one.</p></div><Button kind="soft" onClick={()=>setPage('Explore')}><Compass size={16}/> Explore resources</Button></div>
+  return <><div className="welcome-row"><div><div className="eyebrow">{new Date().toLocaleDateString('en-US',{weekday:'long',month:'long',day:'numeric'}).toUpperCase()}</div><h1>Good {part}, {user?user.username.replace(/_\d{4}$/,'').replace(/_/g,' '):'learner'} <span className="wave">✦</span></h1><p>Every step counts. Let's make today's a good one.</p></div><div style={{display:'flex',gap:10}}><Button kind="soft" onClick={()=>setPage('Focus Mode')}><Timer size={16}/> Focus Mode</Button><Button kind="soft" onClick={()=>setPage('Explore')}><Compass size={16}/> Explore resources</Button></div></div>
     <div className="stats-grid"><Stat icon={Flame} label="Current streak" value={stats?`${stats.streak} days`:'6 days'} change={stats?'Consecutive active days':'+2 days this week'} tone="amber"/><Stat icon={Clock3} label="Learning time" value={stats?stats.time:'4h 32m'} change={stats?'All time':'+18% this week'} tone="violet"/><Stat icon={Target} label="Average quiz score" value={stats?stats.avgQuiz:'86%'} change={stats?'Recent quizzes':'+8% this month'} tone="mint"/><Stat icon={Trophy} label="Resources completed" value={stats?String(stats.completed):'24'} change={stats?'All time':'3 this week'} tone="blue"/></div>
-    <div className="dashboard-grid"><section className="panel map-panel"><div className="panel-heading"><div><div className="eyebrow">YOUR PERSONAL LEARNING SPACE</div><h2>Your learning map</h2></div><button className="icon-btn" onClick={()=>setPage('Profile')}><ArrowUpRight size={17}/></button></div><LearningMap onTopic={onTopic}/><div className="map-legend"><span><i className="legend-dot strong"></i> Strong mastery</span><span><i className="legend-dot developing"></i> Developing</span><span><i className="legend-dot attention"></i> Needs attention</span></div></section>
+
+    {activeJourney && (
+      <section className="panel" style={{padding:20,marginBottom:24,background:'rgba(140,124,255,0.05)',borderColor:'rgba(140,124,255,0.2)'}}>
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',flexWrap:'wrap',gap:12}}>
+          <div>
+            <div className="eyebrow" style={{color:'#8c7cff'}}>ACTIVE LEARNING JOURNEY</div>
+            <h2 style={{margin:'4px 0 2px',fontSize:20}}>{activeJourney.title}</h2>
+            <p className="muted" style={{fontSize:13,margin:0}}>{activeJourney.primary_subject} · {journeyProgress ? `${journeyProgress.completed_steps} of ${journeyProgress.total_steps} steps complete (${journeyProgress.overall_completion_percentage}%)` : 'In progress'}</p>
+          </div>
+          <div style={{display:'flex',gap:8}}>
+            <Button kind="primary" onClick={()=>setPage('Focus Mode')}><Timer size={15}/> Study in Focus Mode</Button>
+            <Button kind="outline" onClick={()=>setPage('Journey')}>View Journey <ArrowRight size={15}/></Button>
+          </div>
+        </div>
+        {journeyProgress && (
+          <div className="progress-track" style={{height:6,marginTop:12}}>
+            <i style={{width:`${journeyProgress.overall_completion_percentage}%`,background:'#8c7cff'}}/>
+          </div>
+        )}
+      </section>
+    )}
+
+    <div className="dashboard-grid"><section className="panel map-panel"><div className="panel-heading"><div><div className="eyebrow">YOUR PERSONAL LEARNING SPACE</div><h2>Your learning map</h2></div><button className="icon-btn" onClick={()=>setPage('Profile')}><ArrowUpRight size={17}/></button></div><LearningMap onTopic={onTopic}/><div className="map-legend"><span><i className="legend-dot strong"></i> Demonstrated mastery (&ge;85%, verified)</span><span><i className="legend-dot developing"></i> Developing</span><span><i className="legend-dot attention"></i> Not yet assessed</span></div></section>
     <section className="panel next-panel"><div className="panel-heading"><div><div className="eyebrow">YOUR NEXT BEST RESOURCE</div><h2>Made for your next step</h2></div>{top.match!=null&&<span className="match-pill"><Sparkles size={12}/>{top.match}% match</span>}</div><div className="next-art"><div className="next-art-orb"></div><span className="next-code">{top.icon}</span><div className="next-art-label"><span>PERSONALIZED PICK</span><b>Build on what you know.</b></div></div><div className="resource-meta"><span>{top.topic}</span><span>·</span><span>{top.level}</span></div><h3>{top.title}</h3><p className="muted">{top.why}</p><div className="next-footer"><span><Clock3 size={14}/> {top.duration}</span><Button onClick={()=>onOpen(top)}>Start learning <ArrowRight size={15}/></Button></div></section></div>
     <section className="recommended-section"><SectionTitle eyebrow="A LITTLE MORE PERSONAL" title="Picked for you" sub="Resources that fit your goals, pace, and progress." action={<button className="inline-link" onClick={()=>setPage('Recommendations')}>View all recommendations <ArrowRight size={15}/></button>}/><div className="resource-grid">{resources.slice(0,3).map(r=><ResourceCard key={r.id} item={r} onOpen={onOpen}/>)}</div></section>
   </>;
@@ -308,9 +386,27 @@ function Quiz({course,onBack,onSubmit}) {
     <div className="quiz-reassurance"><ShieldCheck size={15}/> This is a space to learn, not to be perfect.</div>
   </div></>;
 }
+function Diagnostic({setPage}) {
+  const {user}=useData();
+  const [session,setSession]=useState(null),[question,setQuestion]=useState(null),[pick,setPick]=useState(null),[busy,setBusy]=useState(false),[error,setError]=useState('');
+  async function begin(){setBusy(true);setError('');try{const r=await api.startDiagnostic();setSession(r.session);const n=await api.getNextDiagnosticQuestion(r.session.session_id);setSession(n.session);setQuestion(n.question);}catch(e){setError(e.message);}finally{setBusy(false);}}
+  async function submit(){if(pick===null||!question)return;setBusy(true);setError('');try{const r=await api.submitDiagnosticAnswer(session.session_id,question.session_question_id,pick);setSession(r.session);setPick(null);const n=await api.getNextDiagnosticQuestion(session.session_id);setSession(n.session);setQuestion(n.question);}catch(e){setError(e.message);}finally{setBusy(false);}}
+  if(!user)return <div className="quiz-card panel"><h2>Discover your starting point</h2><p className="muted">Sign in to take a short diagnostic.</p><Button onClick={()=>setPage('Sign Up / Login')}>Sign in <ArrowRight size={15}/></Button></div>;
+  if(!session)return <div className="quiz-wrap"><div className="quiz-card panel"><div className="eyebrow">PERSONALIZED DIAGNOSTIC</div><h1>Find your starting point.</h1><p className="muted">A focused 90–120 second check-in using the subjects and topics in your profile. You can safely return if interrupted.</p>{error&&<p className="auth-error-message">{error}</p>}<Button disabled={busy} onClick={begin}>{busy?'Preparing…':'Start diagnostic'} <ArrowRight size={15}/></Button></div></div>;
+  if(!question)return <div className="quiz-wrap"><div className="quiz-card panel"><div className="eyebrow">DIAGNOSTIC COMPLETE</div><h1>Thanks for checking in.</h1><p className="muted">Your responses were saved. Personalized insights will appear as the assessment experience develops.</p><Button onClick={()=>setPage('Student Dashboard')}>Back to dashboard <ArrowRight size={15}/></Button></div></div>;
+  const progress=session.progress;
+  return <div className="quiz-wrap"><button className="back-link" onClick={()=>setPage('Student Dashboard')}><ArrowLeft size={15}/> Save and return later</button><div className="quiz-top"><div><div className="eyebrow">PERSONALIZED DIAGNOSTIC</div><h1>One question at a time.</h1><p className="muted">{question.subject} · {question.topic}</p></div><div className="quiz-counter">QUESTION <b>{String(question.position).padStart(2,'0')}</b> <span>/ {String(progress.total).padStart(2,'0')}</span></div></div><div className="quiz-progress"><i style={{width:`${(progress.answered/progress.total)*100}%`}}/></div><div className="quiz-card panel"><h2>{question.question}</h2><p className="muted">Choose the answer that feels most accurate.</p><div className="answer-list">{question.options.map((option,index)=><button key={index} className={`answer-option ${pick===index?'selected':''}`} onClick={()=>setPick(index)}><span className="answer-letter">{String.fromCharCode(65+index)}</span><span>{option}</span>{pick===index&&<span className="radio-selected"/>}</button>)}</div>{error&&<p className="auth-error-message">{error}</p>}<div className="quiz-card-footer"><span><Clock3 size={14}/> Your progress is saved after each answer</span><Button disabled={pick===null||busy} onClick={submit}>{busy?'Saving…':'Continue'} <ArrowRight size={15}/></Button></div></div></div>;
+}
 function Profile({onTopic}) {
-  const {topics,user,stats,profile}=useData();
-  return <><SectionTitle eyebrow="GET TO KNOW YOURSELF" title="Your learning profile." sub="A clearer picture of what you know — and where you're headed." action={<Button kind="soft"><Settings2 size={15}/> Profile settings</Button>}/><div className="profile-overview panel"><div className="profile-avatar-large">{initialOf(user)}</div><div className="profile-intro"><h2>{user?user.username.replace(/_\d{4}$/,'').replace(/_/g,' '):'Curious learner'}</h2><p>Building consistency, one session at a time.</p><div className="profile-tags"><span><Flame size={13}/> {stats?stats.streak:6}-day streak</span><span><BookOpen size={13}/> {stats?stats.completed:24} resources completed</span><span><Clock3 size={13}/> {stats?stats.weekHours:4.5} hrs this week</span></div></div><div className="profile-score"><div className="score-ring"><span>{profile?Math.round(profile.engagement_metric*100):68}</span><small>/100</small></div><div><b>{profile?'Engagement (last 30 days)':'Learning momentum'}</b><small>Moving in the right direction</small></div></div></div><div className="profile-grid"><section className="panel"><div className="panel-heading"><div><h2>Topic mastery</h2><p className="muted">Your current understanding, topic by topic.</p></div><button className="icon-btn"><ArrowUpRight size={16}/></button></div><div className="mastery-list">{topics.map(t=><button className="mastery-row" key={t.name} onClick={()=>onTopic(t)}><span className="mastery-icon" style={{background:t.color+'24',color:t.color}}>{t.icon}</span><span className="mastery-info"><b>{t.name}</b><small>{t.state}</small><span className="progress-track"><i style={{width:t.value+'%',background:t.color}}/></span></span><strong>{t.value}%</strong><ChevronRight size={15}/></button>)}</div></section><section className="panel learning-style"><div className="eyebrow">YOUR LEARNING RHYTHM</div><h2>Finding your flow</h2><div className="rhythm-stat"><span className="rhythm-icon"><Clock3 size={19}/></span><div><small>Average session</small><b>26 minutes</b></div></div><div className="rhythm-stat"><span className="rhythm-icon mint"><Zap size={19}/></span><div><small>Most active time</small><b>Evening learner</b></div></div><div className="rhythm-stat"><span className="rhythm-icon amber"><Brain size={19}/></span><div><small>Learning preference</small><b>Practice-first</b></div></div><div className="profile-insight"><Lightbulb size={17}/><p>You tend to retain more when you follow a short concept lesson with a quick practice quiz.</p></div></section></div></>;
+  const {topics,user,stats,profile,knowledge,saveProfile}=useData(); const [editing,setEditing]=useState(false),[busy,setBusy]=useState(false),[message,setMessage]=useState(''); const [draft,setDraft]=useState({});
+  function begin(){setDraft({academic_level:profile?.academic_level||'',selected_subjects:(profile?.selected_subjects||[]).join(', '),selected_topics:(profile?.selected_topics||[]).join(', '),learning_goals:(profile?.learning_goals||[]).join(', '),preferred_pace:profile?.preferred_pace||'balanced',explanation_depth:profile?.explanation_depth||'standard',teaching_approach:profile?.teaching_approach||'mixed',preferred_difficulty:profile?.preferred_difficulty||'adaptive',learning_preferences:profile?.learning_preferences||[]});setMessage('');setEditing(true)}
+  async function save(){setBusy(true);setMessage('');try{const list=v=>v.split(',').map(x=>x.trim()).filter(Boolean);await saveProfile({...draft,selected_subjects:list(draft.selected_subjects),selected_topics:list(draft.selected_topics),learning_goals:list(draft.learning_goals)});setEditing(false);setMessage('Profile saved.')}catch(e){setMessage(e.message)}finally{setBusy(false)}}
+  return <><SectionTitle eyebrow="GET TO KNOW YOURSELF" title="Your learning profile." sub="A clearer picture of what you know — and where you're headed." action={<Button kind="soft" onClick={begin}><Settings2 size={15}/> Profile settings</Button>}/>{message&&<div className="panel" style={{padding:14,marginBottom:16}}>{message}</div>}{editing&&<section className="panel" style={{padding:22,marginBottom:20}}><div className="panel-heading"><div><h2>Learning preferences</h2><p className="muted">Saved securely to your profile.</p></div></div><div className="auth-form"><label>Academic level<input value={draft.academic_level} onChange={e=>setDraft({...draft,academic_level:e.target.value})}/></label><label>Subjects (comma-separated)<input value={draft.selected_subjects} onChange={e=>setDraft({...draft,selected_subjects:e.target.value})}/></label><label>Topics (comma-separated)<input value={draft.selected_topics} onChange={e=>setDraft({...draft,selected_topics:e.target.value})}/></label><label>Goals (comma-separated)<input value={draft.learning_goals} onChange={e=>setDraft({...draft,learning_goals:e.target.value})}/></label><label>Preferred pace<select value={draft.preferred_pace} onChange={e=>setDraft({...draft,preferred_pace:e.target.value})}><option value="slow">Slow</option><option value="balanced">Balanced</option><option value="fast">Fast</option></select></label><label>Explanation depth<select value={draft.explanation_depth} onChange={e=>setDraft({...draft,explanation_depth:e.target.value})}><option value="concise">Concise</option><option value="standard">Standard</option><option value="detailed">Detailed</option></select></label><label>Teaching approach<select value={draft.teaching_approach} onChange={e=>setDraft({...draft,teaching_approach:e.target.value})}><option value="guided">Guided</option><option value="socratic">Question-led</option><option value="project_based">Project based</option><option value="mixed">Mixed</option></select></label><label>Difficulty<select value={draft.preferred_difficulty} onChange={e=>setDraft({...draft,preferred_difficulty:e.target.value})}><option value="beginner">Beginner</option><option value="intermediate">Intermediate</option><option value="advanced">Advanced</option><option value="adaptive">Adaptive</option></select></label><div>{[['visual','Visual'],['text','Text-based'],['example_driven','Example-driven'],['practice_oriented','Practice-oriented']].map(([v,l])=><label key={v} style={{display:'inline-flex',gap:7,margin:'8px 14px 0 0'}}><input type="checkbox" checked={draft.learning_preferences.includes(v)} onChange={e=>setDraft({...draft,learning_preferences:e.target.checked?[...draft.learning_preferences,v]:draft.learning_preferences.filter(x=>x!==v)})}/>{l}</label>)}</div><div style={{display:'flex',gap:10}}><Button onClick={save} disabled={busy}>{busy?'Saving…':'Save preferences'}</Button><Button kind="outline" onClick={()=>setEditing(false)} disabled={busy}>Cancel</Button></div></div></section>}<div className="profile-overview panel"><div className="profile-avatar-large">{initialOf(user)}</div><div className="profile-intro"><h2>{user?user.username.replace(/_\d{4}$/,'').replace(/_/g,' '):'Curious learner'}</h2><p>{profile?.learning_goals?.length?profile.learning_goals.join(' · '):'Building consistency, one session at a time.'}</p><div className="profile-tags"><span><Flame size={13}/> {stats?stats.streak:6}-day streak</span><span><BookOpen size={13}/> {stats?stats.completed:24} resources completed</span><span><Clock3 size={13}/> {stats?stats.weekHours:4.5} hrs this week</span></div></div><div className="profile-score"><div className="score-ring"><span>{profile?Math.round(profile.engagement_metric*100):68}</span><small>/100</small></div><div><b>{profile?'Engagement (last 30 days)':'Learning momentum'}</b><small>{profile?.preferred_pace?`${profile.preferred_pace} pace`:'Moving in the right direction'}</small></div></div></div><div className="profile-grid"><section className="panel"><div className="panel-heading"><div><h2>Topic mastery</h2><p className="muted">Your current understanding, topic by topic.</p></div><button className="icon-btn"><ArrowUpRight size={16}/></button></div><div className="mastery-list">{topics.map(t=><button className="mastery-row" key={t.name} onClick={()=>onTopic(t)}><span className="mastery-icon" style={{background:t.color+'24',color:t.color}}>{t.icon}</span><span className="mastery-info"><b>{t.name}</b><small>{t.state}</small><span className="progress-track"><i style={{width:t.value+'%',background:t.color}}/></span></span><strong>{t.value}%</strong><ChevronRight size={15}/></button>)}</div></section><section className="panel learning-style"><div className="eyebrow">YOUR LEARNING RHYTHM</div><h2>Finding your flow</h2><div className="rhythm-stat"><span className="rhythm-icon"><Clock3 size={19}/></span><div><small>Preferred pace</small><b>{profile?.preferred_pace||'Not set'}</b></div></div><div className="rhythm-stat"><span className="rhythm-icon mint"><Zap size={19}/></span><div><small>Teaching approach</small><b>{profile?.teaching_approach?.replace('_',' ')||'Not set'}</b></div></div><div className="rhythm-stat"><span className="rhythm-icon amber"><Brain size={19}/></span><div><small>Learning preferences</small><b>{profile?.learning_preferences?.join(', ')||'Not set'}</b></div></div></section></div></>;
+}
+function KnowledgeEvidence() {
+  const {knowledge}=useData();
+  if(!knowledge?.evidence?.length)return null;
+  return <section className="panel" style={{padding:22,marginTop:20}}><div className="panel-heading"><div><div className="eyebrow">YOUR EVIDENCE HISTORY</div><h2>How your initial estimates were formed</h2><p className="muted">These are early signals from completed diagnostics, not final mastery labels.</p></div></div><div className="mastery-list">{knowledge.evidence.slice(0,5).map((e,i)=><div className="mastery-row" key={`${e.session_id}-${i}`}><span className="mastery-icon" style={{background:e.outcome==='correct'?'#80e0c124':'#ff9eac24',color:e.outcome==='correct'?'#3aa886':'#d55c72'}}>{e.outcome==='correct'?<Check size={16}/>:<X size={16}/>}</span><span className="mastery-info"><b>{e.topic}</b><small>{e.difficulty} diagnostic evidence · {new Date(e.submitted_at).toLocaleDateString()}</small></span><strong>{e.outcome}</strong></div>)}</div></section>;
 }
 function Recommendations({onOpen}) {
   const {recs:resources,recMeta,recError,refreshRecs}=useData();
@@ -326,17 +422,1301 @@ function About({setPage}) {
   const steps=[{n:'01',icon:Activity,title:'Activity logging',desc:'Learning sessions, quiz attempts, and completions help the system understand how you learn.'},{n:'02',icon:Brain,title:'Learner profile',desc:'Your profile brings together topic mastery, learning pace, interests, and areas to strengthen.'},{n:'03',icon:BookOpen,title:'Content-based filtering',desc:'Resources are matched to your current skills, goals, topic interests, and preferred formats.'},{n:'04',icon:Users,title:'Collaborative signals',desc:'Where enough anonymous learning patterns exist, similar learner journeys can help surface useful resources.'},{n:'05',icon:Sparkles,title:'Hybrid ranking',desc:'Signals are combined to rank relevant next steps, then refreshed as your learning evolves.'}];
   return <><section className="about-hero"><div className="eyebrow">THE THINKING BEHIND YOUR PATH</div><h1>Personalized isn't a feature.<br/><span>It's the whole point.</span></h1><p>NovaLearn connects the dots between what you learn, how you learn, and what could help you grow next.</p><div className="about-hero-art"><div className="about-node node-left"><BookOpen size={20}/><span>Activity</span></div><div className="about-node node-center"><Brain size={27}/><span>Your profile</span></div><div className="about-node node-right"><Sparkles size={20}/><span>Next best step</span></div><div className="about-connection c1"></div><div className="about-connection c2"></div><div className="about-orbit-ring"></div></div></section><div className="about-process"><SectionTitle eyebrow="BEHIND THE EXPERIENCE" title="A little science. A lot more you." sub="Five steps help turn learning activity into a more personal path."/><div className="process-list">{steps.map((s,i)=><div className="process-step" key={s.n}><div className="process-number">{s.n}</div><div className="process-icon"><s.icon size={21}/></div><div className="process-copy"><h3>{s.title}</h3><p>{s.desc}</p></div><div className="process-line">{i<steps.length-1&&<span/>}</div></div>)}</div></div><div className="about-bottom"><div className="about-bottom-orb"><Orb small/></div><div><div className="eyebrow">YOUR NEXT CHAPTER STARTS HERE</div><h2>Curiosity looks good on you.</h2><p>Find a resource, take a small step, and let your next recommendation grow from there.</p><Button onClick={()=>setPage('Explore')}>Explore your next step <ArrowRight size={15}/></Button></div></div></>;
 }
+function LearningJourneyView({setPage}) {
+  const {user} = useData();
+  const [journey, setJourney] = useState(null);
+  const [progress, setProgress] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const [activeAssessment, setActiveAssessment] = useState(null);
+  const [selectedAnswers, setSelectedAnswers] = useState({});
+  const [assessmentResult, setAssessmentResult] = useState(null);
+  const [actionLoading, setActionLoading] = useState({});
+  const [adaptLoading, setAdaptLoading] = useState(false);
+  const [adaptNotice, setAdaptNotice] = useState('');
+  const [activeVideo, setActiveVideo] = useState(null);
+  const [videoPlayback, setVideoPlayback] = useState({
+    currentTime: 0,
+    duration: 300,
+    isPlaying: false,
+    speed: 1.0,
+    intervals: [],
+    uniqueWatched: 0,
+    thresholdReached: false,
+    syncLoading: false,
+    syncNotice: '',
+    errorNotice: '',
+  });
+
+  const ytPlayerRef = useRef(null);
+  const ytIntervalRef = useRef(null);
+  const lastTimeRef = useRef(null);
+  const isPlayingRef = useRef(false);
+  const currentIntervalsRef = useRef([]);
+
+  async function loadProgress(journeyId) {
+    try {
+      const res = await api.getJourneyProgress(journeyId);
+      setProgress(res.progress);
+    } catch (e) {
+      // Non-fatal if progress endpoint fails to fetch
+    }
+  }
+
+  useEffect(() => {
+    if (user) {
+      api.listLearningJourneys().then(r => {
+        if (r.journeys?.length) {
+          const jId = r.journeys[0].id;
+          api.getLearningJourney(jId).then(j => {
+            setJourney(j.journey);
+            loadProgress(jId);
+          }).catch(() => {});
+        }
+      }).catch(() => {});
+    }
+  }, [user]);
+
+  async function generate() {
+    setBusy(true); setError('');
+    try {
+      const res = await api.createLearningJourney({force_regenerate: true});
+      setJourney(res.journey);
+      if (res.journey?.id) loadProgress(res.journey.id);
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleStartActivity(stepId, actId) {
+    if (!journey) return;
+    setActionLoading(prev => ({...prev, [actId]: true}));
+    try {
+      await api.startJourneyActivity(journey.id, actId);
+      await loadProgress(journey.id);
+      const updated = await api.getLearningJourney(journey.id);
+      setJourney(updated.journey);
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setActionLoading(prev => ({...prev, [actId]: false}));
+    }
+  }
+
+  async function handleAdapt() {
+    if (!journey) return;
+    setAdaptLoading(true); setAdaptNotice(''); setError('');
+    try {
+      const res = await api.adaptLearningJourney(journey.id, 'learner_progress_adaptation');
+      if (res.adapted) {
+        setAdaptNotice(`Journey adapted to Version ${res.current_version_number}: ${res.journey?.current_version?.generation_reason || 'Updated with verified evidence'}`);
+      } else {
+        setAdaptNotice('Journey is already up to date with your current learning evidence.');
+      }
+      setJourney(res.journey);
+      await loadProgress(journey.id);
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setAdaptLoading(false);
+    }
+  }
+
+  function handleOpenVideo(stepId, act) {
+    const tracking = act.payload?.playback_tracking || {};
+    const rawDur = act.payload?.duration_seconds;
+    const dur = rawDur !== undefined && rawDur !== null && rawDur > 0 ? rawDur : null;
+    const initialIntervals = tracking.watched_intervals || [];
+    const initialWatched = tracking.unique_watched_seconds || 0;
+    currentIntervalsRef.current = initialIntervals;
+    lastTimeRef.current = tracking.position_seconds || 0;
+    isPlayingRef.current = false;
+    setActiveVideo({stepId, act});
+    setVideoPlayback({
+      currentTime: tracking.position_seconds || 0,
+      duration: dur,
+      isPlaying: false,
+      speed: 1.0,
+      intervals: initialIntervals,
+      uniqueWatched: initialWatched,
+      thresholdReached: !!tracking.threshold_reached || !!act.is_completed,
+      syncLoading: false,
+      syncNotice: '',
+      errorNotice: '',
+    });
+  }
+
+  function closeVideoModal() {
+    isPlayingRef.current = false;
+    if (ytIntervalRef.current) {
+      clearInterval(ytIntervalRef.current);
+      ytIntervalRef.current = null;
+    }
+    if (ytPlayerRef.current) {
+      try {
+        ytPlayerRef.current.destroy();
+      } catch (_) {}
+      ytPlayerRef.current = null;
+    }
+    setVideoPlayback(p => ({...p, isPlaying: false}));
+    setActiveVideo(null);
+  }
+
+  async function syncVideoTelemetry(overrideIntervals = null, eventType = 'timeupdate', overridePos = null) {
+    if (!journey || !activeVideo) return;
+    const intervalsToSend = overrideIntervals || currentIntervalsRef.current || videoPlayback.intervals;
+    const posToSend = overridePos !== null ? overridePos : (ytPlayerRef.current?.getCurrentTime?.() ?? videoPlayback.currentTime);
+    setVideoPlayback(prev => ({...prev, syncLoading: true, syncNotice: ''}));
+    try {
+      const res = await api.updateVideoPlayback(journey.id, activeVideo.act.id, {
+        event_type: eventType,
+        position_seconds: posToSend,
+        intervals: intervalsToSend,
+      });
+      const t = res.playback_tracking || {};
+      setVideoPlayback(prev => ({
+        ...prev,
+        uniqueWatched: t.unique_watched_seconds ?? prev.uniqueWatched,
+        thresholdReached: !!t.threshold_reached,
+        syncLoading: false,
+        syncNotice: t.threshold_reached ? 'Verified: 80% threshold reached!' : 'Playback telemetry synchronized.',
+      }));
+      await loadProgress(journey.id);
+      const updated = await api.getLearningJourney(journey.id);
+      setJourney(updated.journey);
+    } catch (e) {
+      setVideoPlayback(prev => ({...prev, syncLoading: false, syncNotice: `Sync failed: ${e.message}`}));
+    }
+  }
+
+  useEffect(() => {
+    if (!activeVideo) return;
+    const vidId = activeVideo.act.payload?.video_id;
+    if (!vidId || vidId.startsWith('vid_')) {
+      return;
+    }
+
+    let isMounted = true;
+    let controller = null;
+
+    async function initController() {
+      await loadYouTubeIFrameAPI();
+      if (!isMounted) return;
+
+      if (ytPlayerRef.current) {
+        try { ytPlayerRef.current.destroy(); } catch (_) {}
+        ytPlayerRef.current = null;
+      }
+
+      controller = createYouTubePlayerController({
+        videoId: vidId,
+        containerId: 'yt-player-container',
+        startPosition: activeVideo.act.payload?.playback_tracking?.position_seconds || 0,
+        initialIntervals: currentIntervalsRef.current,
+        onReady: ({ duration }) => {
+          if (!isMounted) return;
+          if (duration && duration > 0) {
+            setVideoPlayback(p => ({ ...p, duration }));
+          }
+        },
+        onStateChange: ({ isPlaying, currentTime, eventType }) => {
+          if (!isMounted) return;
+          isPlayingRef.current = isPlaying;
+          setVideoPlayback(p => ({ ...p, isPlaying, currentTime }));
+          syncVideoTelemetry(null, eventType, currentTime);
+        },
+        onSample: ({ currentTime, intervals, uniqueWatched }) => {
+          if (!isMounted) return;
+          currentIntervalsRef.current = intervals;
+          setVideoPlayback(p => ({
+            ...p,
+            currentTime,
+            intervals,
+            uniqueWatched,
+          }));
+        },
+        onError: ({ message }) => {
+          if (!isMounted) return;
+          setVideoPlayback(p => ({ ...p, errorNotice: message }));
+        },
+      });
+
+      ytPlayerRef.current = controller;
+    }
+
+    initController();
+
+    return () => {
+      isMounted = false;
+      isPlayingRef.current = false;
+      if (controller) {
+        try { controller.destroy(); } catch (_) {}
+      }
+      ytPlayerRef.current = null;
+    };
+  }, [activeVideo?.act?.id]);
+
+  function togglePlayPause() {
+    if (ytPlayerRef.current) {
+      try {
+        if (videoPlayback.isPlaying) {
+          ytPlayerRef.current.pauseVideo();
+        } else {
+          ytPlayerRef.current.playVideo();
+        }
+      } catch (_) {}
+    } else {
+      setVideoPlayback(p => ({...p, syncNotice: 'Real YouTube video player is only active for external YouTube video IDs.'}));
+    }
+  }
+
+  function handleSeek(newPos) {
+    lastTimeRef.current = newPos;
+    if (ytPlayerRef.current) {
+      try {
+        ytPlayerRef.current.seekTo(newPos, true);
+      } catch (_) {}
+    }
+    setVideoPlayback(prev => ({...prev, currentTime: newPos}));
+    syncVideoTelemetry(null, 'seeking', newPos);
+  }
+
+  function handleSpeedChange(newSpeed) {
+    const sp = Number(newSpeed);
+    if (ytPlayerRef.current && ytPlayerRef.current.setPlaybackRate) {
+      try {
+        ytPlayerRef.current.setPlaybackRate(sp);
+      } catch (_) {}
+    }
+    setVideoPlayback(p => ({...p, speed: sp}));
+  }
+
+  async function handleAttestUnknownDuration() {
+    if (!journey || !activeVideo) return;
+    setVideoPlayback(p => ({...p, syncLoading: true, syncNotice: ''}));
+    try {
+      await api.completeJourneyActivity(journey.id, activeVideo.act.id, { self_attested: true });
+      setVideoPlayback(p => ({
+        ...p,
+        thresholdReached: true,
+        syncLoading: false,
+        syncNotice: 'Self-attested completion recorded successfully.',
+      }));
+      await loadProgress(journey.id);
+      const updated = await api.getLearningJourney(journey.id);
+      setJourney(updated.journey);
+    } catch (e) {
+      setVideoPlayback(p => ({...p, syncLoading: false, syncNotice: `Attestation failed: ${e.message}`}));
+    }
+  }
+
+  async function handleCompleteGeneric(stepId, actId) {
+    if (!journey) return;
+    setActionLoading(prev => ({...prev, [actId]: true}));
+    try {
+      await api.completeJourneyActivity(journey.id, actId);
+      await loadProgress(journey.id);
+      const updated = await api.getLearningJourney(journey.id);
+      setJourney(updated.journey);
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setActionLoading(prev => ({...prev, [actId]: false}));
+    }
+  }
+
+  async function handleOpenMilestone(stepId) {
+    if (!journey) return;
+    setError(''); setAssessmentResult(null); setSelectedAnswers({});
+    try {
+      const res = await api.getMilestoneAssessment(journey.id, stepId);
+      setActiveAssessment({stepId, ...res.milestone_assessment});
+    } catch (e) {
+      setError(e.message);
+    }
+  }
+
+  async function handleSubmitMilestone() {
+    if (!journey || !activeAssessment) return;
+    setBusy(true); setError('');
+    try {
+      const answersList = Object.entries(selectedAnswers).map(([k, v]) => ({
+        item_id: Number(k),
+        selected_answer_index: Number(v),
+      }));
+      const res = await api.submitMilestoneAssessment(journey.id, activeAssessment.stepId, {
+        milestone_id: activeAssessment.milestone_id,
+        answers: answersList,
+      });
+      setAssessmentResult(res.milestone_result);
+      await loadProgress(journey.id);
+      const updated = await api.getLearningJourney(journey.id);
+      setJourney(updated.journey);
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (!user) return (
+    <div className="quiz-card panel">
+      <h2>Personalized Learning Journey</h2>
+      <p className="muted">Sign in to view your structured learning journey and progress tracking.</p>
+      <Button onClick={() => setPage('Sign Up / Login')}>Sign in <ArrowRight size={15}/></Button>
+    </div>
+  );
+
+  return (
+    <>
+      <SectionTitle
+        eyebrow="PROGRESS TRACKING & MILESTONE ASSESSMENTS"
+        title="Your Learning Journey."
+        sub="Backend-authoritative progress tracking, verified video completions, and demonstrated mastery evidence."
+        action={
+          <div style={{display: 'flex', gap: 8, alignItems: 'center'}}>
+            {journey && (
+              <Button onClick={handleAdapt} disabled={adaptLoading || busy}>
+                <RefreshCw size={14} style={{marginRight: 4}} className={adaptLoading ? 'spin' : ''}/>
+                {adaptLoading ? 'Adapting…' : 'Adapt Journey'}
+              </Button>
+            )}
+            <Button onClick={generate} disabled={busy || adaptLoading}>
+              <Sparkles size={14} style={{marginRight: 4}}/>{busy ? 'Generating…' : journey ? 'Regenerate Journey' : 'Generate Journey'}
+            </Button>
+          </div>
+        }
+      />
+
+      {error && <div className="panel" style={{padding: 14, marginBottom: 16, color: '#ff9eac', borderColor: 'rgba(255,100,100,0.3)'}}>{error}</div>}
+
+      {adaptNotice && (
+        <div className="panel" style={{padding: 12, marginBottom: 16, background: 'rgba(140,124,255,0.08)', borderColor: 'rgba(140,124,255,0.3)', color: '#b9aaff', fontSize: 13}}>
+          {adaptNotice}
+        </div>
+      )}
+
+      {progress && (
+        <div className="panel" style={{padding: 20, marginBottom: 20, background: 'rgba(140,124,255,0.04)'}}>
+          <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 12}}>
+            <div>
+              <span className="eyebrow" style={{color: '#8c7cff'}}>AUTHORITATIVE PROGRESS</span>
+              <h3 style={{margin: '4px 0 2px'}}>{progress.journey_title}</h3>
+              <p className="muted" style={{fontSize: 13, margin: 0}}>
+                {progress.completed_steps} of {progress.total_steps} steps completed ({progress.overall_completion_percentage}%)
+                {progress.blocked_steps > 0 && ` • ${progress.blocked_steps} step(s) waiting for prerequisites`}
+              </p>
+            </div>
+            <div style={{minWidth: 160}}>
+              <div style={{display: 'flex', justifyContent: 'space-between', fontSize: 12, marginBottom: 4}}>
+                <span className="muted">Completion</span>
+                <b>{progress.overall_completion_percentage}%</b>
+              </div>
+              <div className="progress-track" style={{height: 8}}>
+                <i style={{width: `${progress.overall_completion_percentage}%`}}/>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {journey && (
+        <div className="panel" style={{padding: 22, marginBottom: 20}}>
+          <div className="panel-heading">
+            <div>
+              <span className="tag">{journey.primary_subject}</span>
+              <h2>{journey.title}</h2>
+              <p className="muted">{journey.description}</p>
+            </div>
+            <div style={{display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap'}}>
+              <span className="tag tag-easy">Version {journey.current_version_number}</span>
+              {journey.current_version?.generation_reason && (
+                <span className="tag" style={{fontSize: 11, background: 'rgba(140,124,255,0.1)'}}>
+                  {journey.current_version.generation_reason}
+                </span>
+              )}
+              <span className={`tag ${journey.status === 'completed' ? 'tag-easy' : ''}`} style={{textTransform: 'capitalize'}}>
+                {journey.status.replace(/_/g, ' ')}
+              </span>
+            </div>
+          </div>
+
+          <div className="mastery-list" style={{marginTop: 16}}>
+            {(journey.steps || []).map(s => {
+              const isPrereq = s.metadata?.is_prerequisite_preparation;
+              const stepProg = progress?.steps?.find(ps => ps.step_id === s.id);
+              const completionStatus = stepProg?.completion_status || s.completion_status || 'not_started';
+              const topicProf = stepProg?.topic_proficiency;
+              const isBlocked = completionStatus === 'blocked';
+              const isCompleted = completionStatus === 'completed';
+
+              return (
+                <div
+                  className="mastery-row"
+                  key={s.id}
+                  style={{
+                    alignItems: 'flex-start',
+                    padding: '18px 0',
+                    borderBottom: '1px solid rgba(255,255,255,0.06)',
+                    opacity: isBlocked ? 0.6 : 1,
+                  }}
+                >
+                  <span
+                    className="mastery-icon"
+                    style={{
+                      background: isCompleted ? '#80e0c124' : isPrereq ? '#ffc87924' : '#8c7cff24',
+                      color: isCompleted ? '#80e0c1' : isPrereq ? '#ffc879' : '#8c7cff',
+                      minWidth: 34,
+                      minHeight: 34,
+                    }}
+                  >
+                    {isCompleted ? <Check size={16}/> : <b>{s.sequence_position}</b>}
+                  </span>
+
+                  <div className="mastery-info" style={{flex: 1}}>
+                    <div style={{display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap'}}>
+                      <b style={{fontSize: 16}}>{s.title}</b>
+                      {isPrereq && (
+                        <span className="tag" style={{color: '#ffc879', background: '#ffc87915'}}>
+                          Prerequisite Preparation
+                        </span>
+                      )}
+                      <span
+                        className={`tag ${isCompleted ? 'tag-easy' : isBlocked ? '' : 'tag-medium'}`}
+                        style={{textTransform: 'capitalize'}}
+                      >
+                        {completionStatus.replace(/_/g, ' ')}
+                      </span>
+                      {s.metadata?.carried_forward_from_version && (
+                        <span className="tag" style={{fontSize: 11, background: 'rgba(128,224,193,0.12)', color: '#80e0c1'}}>
+                          Preserved from V{s.metadata.carried_forward_from_version}
+                        </span>
+                      )}
+                      <span className="tag" style={{fontSize: 11}}>
+                        Readiness: {s.readiness_status?.replace(/_/g, ' ')}
+                      </span>
+                      {topicProf?.estimate !== null && topicProf?.estimate !== undefined && (
+                        <span
+                          className="tag"
+                          style={{
+                            fontSize: 11,
+                            background: topicProf.is_demonstrated ? '#80e0c115' : 'rgba(255,255,255,0.05)',
+                            color: topicProf.is_demonstrated ? '#80e0c1' : '#b0b7c3',
+                          }}
+                        >
+                          Topic Mastery: {Math.round(topicProf.estimate * 100)}% ({topicProf.assessment_status})
+                        </span>
+                      )}
+                      {s.estimated_duration_minutes && (
+                        <span className="muted" style={{fontSize: 12}}>
+                          <Clock3 size={11} style={{display: 'inline', marginRight: 3}}/>
+                          {s.estimated_duration_minutes} min
+                        </span>
+                      )}
+                    </div>
+
+                    <small style={{display: 'block', marginTop: 4, color: '#b0b7c3'}}>
+                      {s.learning_objective}
+                    </small>
+
+                    <div style={{marginTop: 12, display: 'flex', flexDirection: 'column', gap: 8}}>
+                      {(s.activities || []).map((a, i) => {
+                        const actProg = stepProg?.activities?.find(pa => pa.id === a.id);
+                        const aStatus = actProg?.status || a.status || (a.is_completed ? 'completed' : 'not_started');
+                        const aCompleted = aStatus === 'completed' || a.is_completed;
+                        const aLoading = actionLoading[a.id];
+
+                        return (
+                          <div
+                            key={i}
+                            style={{
+                              fontSize: 13,
+                              background: 'rgba(255,255,255,0.03)',
+                              padding: '10px 14px',
+                              borderRadius: 8,
+                              display: 'flex',
+                              justifyContent: 'space-between',
+                              alignItems: 'center',
+                              flexWrap: 'wrap',
+                              gap: 10,
+                            }}
+                          >
+                            <div style={{flex: 1, minWidth: 200}}>
+                              <div style={{display: 'flex', alignItems: 'center', gap: 8}}>
+                                <span style={{fontWeight: 500}}>{a.title}</span>
+                                {aCompleted ? (
+                                  <span className="tag tag-easy" style={{fontSize: 10}}>Completed</span>
+                                ) : aStatus === 'in_progress' ? (
+                                  <span className="tag" style={{fontSize: 10, color: '#8c7cff'}}>In Progress</span>
+                                ) : (
+                                  <span className="tag" style={{fontSize: 10, opacity: 0.6}}>Not Started</span>
+                                )}
+                              </div>
+                              {a.payload?.suitability_outcome && (
+                                <span className="muted" style={{display: 'block', fontSize: 11, marginTop: 2}}>
+                                  Suitability: {a.payload.suitability_outcome} ({a.payload.suitability_score}%)
+                                </span>
+                              )}
+                            </div>
+
+                            <div style={{display: 'flex', alignItems: 'center', gap: 8}}>
+                              {!aCompleted && !isBlocked && (
+                                <>
+                                  {aStatus === 'not_started' && (
+                                    <Button
+                                      size="sm"
+                                      disabled={aLoading}
+                                      onClick={() => handleStartActivity(s.id, a.id)}
+                                    >
+                                      Start Activity
+                                    </Button>
+                                  )}
+                                  {aStatus === 'in_progress' && a.activity_type === 'educational_video' && (
+                                    <Button
+                                      size="sm"
+                                      disabled={aLoading}
+                                      onClick={() => handleOpenVideo(s.id, a)}
+                                    >
+                                      <Play size={12} style={{marginRight: 4}}/>Watch Lesson
+                                    </Button>
+                                  )}
+                                  {aStatus === 'in_progress' && (a.activity_type === 'knowledge_checkpoint' || a.activity_type === 'practice_assessment') && (
+                                    <Button
+                                      size="sm"
+                                      onClick={() => handleOpenMilestone(s.id)}
+                                    >
+                                      Take Assessment
+                                    </Button>
+                                  )}
+                                  {aStatus === 'in_progress' && a.activity_type !== 'educational_video' && a.activity_type !== 'knowledge_checkpoint' && (
+                                    <Button
+                                      size="sm"
+                                      disabled={aLoading}
+                                      onClick={() => handleCompleteGeneric(s.id, a.id)}
+                                    >
+                                      Complete
+                                    </Button>
+                                  )}
+                                </>
+                              )}
+                              {aCompleted && (
+                                <span className="muted" style={{fontSize: 12, color: '#80e0c1', display: 'flex', alignItems: 'center', gap: 4}}>
+                                  <Check size={14}/> Verified
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {activeVideo && (
+        <div className="modal-backdrop" onClick={closeVideoModal}>
+          <div className="topic-modal" style={{maxWidth: 620, width: '92%'}} onClick={e => e.stopPropagation()}>
+            <button className="icon-btn modal-close" onClick={closeVideoModal}>
+              <X size={17}/>
+            </button>
+            <div className="eyebrow" style={{color: '#8c7cff'}}>VERIFIED EDUCATIONAL VIDEO PLAYER</div>
+            <h2 style={{fontSize: 18, margin: '6px 0 2px'}}>{activeVideo.act.title}</h2>
+            <p className="muted" style={{fontSize: 13, marginBottom: 12}}>
+              {activeVideo.act.payload?.channel_name || 'Educational Resource'}
+              {activeVideo.act.payload?.suitability_outcome && (
+                <> • <span style={{color: '#80e0c1'}}>Suitability: {activeVideo.act.payload.suitability_outcome} ({activeVideo.act.payload.suitability_score}%)</span></>
+              )}
+            </p>
+
+            <div style={{position: 'relative', width: '100%', height: 260, background: '#0a0d14', borderRadius: 8, overflow: 'hidden', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center'}}>
+              {activeVideo.act.payload?.video_id && !activeVideo.act.payload.video_id.startsWith('vid_') ? (
+                <div id="yt-player-container" style={{position: 'absolute', top: 0, left: 0, width: '100%', height: '100%'}} />
+              ) : (
+                <div style={{textAlign: 'center', padding: 20}}>
+                  <div style={{width: 48, height: 48, borderRadius: '50%', background: 'rgba(140,124,255,0.15)', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', color: '#8c7cff', marginBottom: 8}}>
+                    <Play size={22}/>
+                  </div>
+                  <div style={{fontWeight: 600, fontSize: 14}}>{activeVideo.act.title}</div>
+                  <small className="muted" style={{display: 'block', marginTop: 4}}>
+                    Test/Placeholder video identifier ({activeVideo.act.payload?.video_id || 'unknown'}). Official YouTube IFrame Player attaches to real YouTube video IDs.
+                  </small>
+                </div>
+              )}
+            </div>
+
+            {videoPlayback.errorNotice && (
+              <div style={{color: '#ff8a80', fontSize: 12, marginTop: 8}}>
+                {videoPlayback.errorNotice}
+              </div>
+            )}
+
+            <div style={{marginTop: 14, background: 'rgba(255,255,255,0.03)', padding: 12, borderRadius: 8}}>
+              <div style={{display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8}}>
+                <button
+                  className="btn btn-sm"
+                  style={{padding: '6px 14px', display: 'flex', alignItems: 'center', gap: 6}}
+                  onClick={togglePlayPause}
+                >
+                  {videoPlayback.isPlaying ? <><Pause size={14}/> Pause</> : <><Play size={14}/> Play</>}
+                </button>
+                <div style={{flex: 1, display: 'flex', alignItems: 'center', gap: 8}}>
+                  <input
+                    type="range"
+                    min="0"
+                    max={videoPlayback.duration || 300}
+                    value={Math.round(videoPlayback.currentTime)}
+                    onChange={e => handleSeek(Number(e.target.value))}
+                    style={{flex: 1, accentColor: '#8c7cff'}}
+                  />
+                  <span style={{fontSize: 12, fontFamily: 'monospace', minWidth: 80, textAlign: 'right'}}>
+                    {Math.floor(videoPlayback.currentTime / 60)}:{String(Math.floor(videoPlayback.currentTime % 60)).padStart(2, '0')} / {videoPlayback.duration ? `${Math.floor(videoPlayback.duration / 60)}:${String(Math.floor(videoPlayback.duration % 60)).padStart(2, '0')}` : 'unknown'}
+                  </span>
+                </div>
+                <select
+                  value={videoPlayback.speed}
+                  onChange={e => handleSpeedChange(e.target.value)}
+                  style={{fontSize: 12, background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.1)', color: '#fff', borderRadius: 4, padding: '3px 6px'}}
+                >
+                  <option value={0.75}>0.75x</option>
+                  <option value={1.0}>1.0x</option>
+                  <option value={1.25}>1.25x</option>
+                  <option value={1.5}>1.5x</option>
+                  <option value={2.0}>2.0x</option>
+                </select>
+              </div>
+
+              <div style={{display: 'flex', justifyContent: 'space-between', fontSize: 12, marginTop: 10}}>
+                <span className="muted">
+                  Uniquely Watched: <b>{Math.round(videoPlayback.uniqueWatched)}s</b> {videoPlayback.duration ? `(${Math.min(100, Math.round((videoPlayback.uniqueWatched / videoPlayback.duration) * 100))}%)` : ''}
+                </span>
+                <span style={{color: videoPlayback.thresholdReached ? '#80e0c1' : '#ffc879'}}>
+                  {videoPlayback.thresholdReached ? '✓ 80% Threshold Reached' : (videoPlayback.duration ? `Required: 80% (${Math.round(videoPlayback.duration * 0.8)}s)` : 'Duration Unknown (Self-attestation or Checkpoint required)')}
+                </span>
+              </div>
+              <div className="progress-track" style={{height: 6, marginTop: 6}}>
+                <i style={{
+                  width: `${videoPlayback.duration ? Math.min(100, (videoPlayback.uniqueWatched / videoPlayback.duration) * 100) : 0}%`,
+                  background: videoPlayback.thresholdReached ? '#80e0c1' : '#8c7cff',
+                }}/>
+              </div>
+
+              {videoPlayback.syncNotice && (
+                <small style={{display: 'block', marginTop: 8, color: videoPlayback.thresholdReached ? '#80e0c1' : '#b0b7c3'}}>
+                  {videoPlayback.syncNotice}
+                </small>
+              )}
+            </div>
+
+            <div style={{display: 'flex', gap: 10, marginTop: 16}}>
+              {!videoPlayback.duration && !videoPlayback.thresholdReached && (
+                <Button
+                  variant="secondary"
+                  disabled={videoPlayback.syncLoading}
+                  onClick={handleAttestUnknownDuration}
+                  style={{flex: 1, borderColor: '#ffc879', color: '#ffc879'}}
+                >
+                  Attest Watched (Unknown Duration)
+                </Button>
+              )}
+              <Button
+                variant="secondary"
+                disabled={videoPlayback.syncLoading}
+                onClick={() => syncVideoTelemetry(null, 'timeupdate')}
+                style={{flex: 1}}
+              >
+                {videoPlayback.syncLoading ? 'Syncing Telemetry…' : 'Sync Progress to Server'}
+              </Button>
+              <Button
+                style={{flex: 1}}
+                onClick={closeVideoModal}
+              >
+                Done
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Milestone Assessment Modal */}
+      {activeAssessment && (
+        <div className="modal-backdrop" onClick={() => !busy && setActiveAssessment(null)}>
+          <div className="topic-modal" style={{maxWidth: 620}} onClick={e => e.stopPropagation()}>
+            <button className="icon-btn modal-close" onClick={() => setActiveAssessment(null)}><X size={17}/></button>
+            <div className="auth-icon"><GraduationCap size={24}/></div>
+            <div className="eyebrow">MILESTONE ASSESSMENT</div>
+            <h2>{activeAssessment.topic}</h2>
+            <p className="muted">
+              {activeAssessment.insufficient_evidence
+                ? 'Insufficient question bank coverage for this topic. No learner failure recorded.'
+                : 'Server-graded milestone questions measuring demonstrated learning progress.'}
+            </p>
+
+            {activeAssessment.insufficient_evidence ? (
+              <div style={{marginTop: 16}}>
+                <div className="panel" style={{padding: 14, background: 'rgba(255,255,255,0.02)'}}>
+                  <p className="muted" style={{margin: 0}}>
+                    No active diagnostic items exist for {activeAssessment.topic}. The system honestly preserves your record as insufficient evidence rather than failure.
+                  </p>
+                </div>
+                <Button block style={{marginTop: 16}} onClick={() => setActiveAssessment(null)}>Close</Button>
+              </div>
+            ) : assessmentResult ? (
+              <div style={{marginTop: 16}}>
+                <div style={{textAlign: 'center', padding: '16px 0'}}>
+                  <div style={{fontSize: 32, fontWeight: 700, color: assessmentResult.is_mastered ? '#80e0c1' : '#ffc879'}}>
+                    {assessmentResult.score_percentage}%
+                  </div>
+                  <p className="muted" style={{marginTop: 4}}>
+                    Score: {assessmentResult.correct_count} of {assessmentResult.questions_count} correct
+                  </p>
+                  <div style={{display: 'inline-block', marginTop: 8}}>
+                    <span className={`tag ${assessmentResult.is_mastered ? 'tag-easy' : 'tag-medium'}`}>
+                      {assessmentResult.is_mastered ? 'Demonstrated Mastery' : 'Completed (Developing)'}
+                    </span>
+                  </div>
+                </div>
+
+                <div style={{maxHeight: 240, overflowY: 'auto', marginTop: 12, display: 'flex', flexDirection: 'column', gap: 8}}>
+                  {(assessmentResult.feedback || []).map((fb, idx) => (
+                    <div key={idx} style={{padding: 10, background: 'rgba(255,255,255,0.03)', borderRadius: 6, fontSize: 13}}>
+                      <div style={{fontWeight: 500, color: fb.is_correct ? '#80e0c1' : '#ff9eac'}}>
+                        {fb.is_correct ? '✓ Correct' : '✗ Incorrect'}: {fb.question}
+                      </div>
+                      {fb.explanation && <small className="muted" style={{display: 'block', marginTop: 4}}>{fb.explanation}</small>}
+                    </div>
+                  ))}
+                </div>
+
+                <Button block style={{marginTop: 16}} onClick={() => setActiveAssessment(null)}>Done</Button>
+              </div>
+            ) : (
+              <div style={{marginTop: 16}}>
+                <div style={{maxHeight: 320, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 14}}>
+                  {(activeAssessment.questions || []).map((q, idx) => (
+                    <div key={q.item_id || idx} style={{padding: 12, background: 'rgba(255,255,255,0.03)', borderRadius: 8}}>
+                      <div style={{fontWeight: 500, fontSize: 14, marginBottom: 8}}>
+                        {idx + 1}. {q.question}
+                      </div>
+                      <div style={{display: 'flex', flexDirection: 'column', gap: 6}}>
+                        {(q.options || []).map((opt, optIdx) => (
+                          <label
+                            key={optIdx}
+                            style={{
+                              display: 'flex',
+                              alignItems: 'center',
+                              gap: 8,
+                              fontSize: 13,
+                              cursor: 'pointer',
+                              padding: '6px 8px',
+                              borderRadius: 4,
+                              background: selectedAnswers[q.item_id] === optIdx ? 'rgba(140,124,255,0.15)' : 'transparent',
+                            }}
+                          >
+                            <input
+                              type="radio"
+                              name={`q_${q.item_id}`}
+                              checked={selectedAnswers[q.item_id] === optIdx}
+                              onChange={() => setSelectedAnswers(prev => ({...prev, [q.item_id]: optIdx}))}
+                            />
+                            <span>{opt}</span>
+                          </label>
+                        ))}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+
+                <Button
+                  block
+                  style={{marginTop: 16}}
+                  disabled={busy || Object.keys(selectedAnswers).length === 0}
+                  onClick={handleSubmitMilestone}
+                >
+                  {busy ? 'Evaluating…' : 'Submit Answers'}
+                </Button>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {!journey && !error && (
+        <div className="empty-state">
+          <Sparkles size={28}/>
+          <h3>No active learning journey</h3>
+          <p>Click "Generate Journey" to build a structured educational plan with progress tracking and milestone assessments.</p>
+        </div>
+      )}
+    </>
+  );
+}
+
+function FocusMode({setPage}) {
+  const {user} = useData();
+  const [session, setSession] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const [studyElapsed, setStudyElapsed] = useState(0);
+  const [breakElapsed, setBreakElapsed] = useState(0);
+  const [customInterval, setCustomInterval] = useState('');
+  const heartbeatTimerRef = useRef(null);
+  const tickTimerRef = useRef(null);
+
+  // Fetch current session on mount
+  useEffect(() => {
+    if (!user) return;
+    api.getCurrentFocusSession().then(res => {
+      if (res.session) {
+        setSession(res.session);
+        setStudyElapsed(Math.round(res.session.study_duration_seconds || 0));
+        setBreakElapsed(Math.round(res.session.break_duration_seconds || 0));
+      }
+    }).catch(() => {});
+  }, [user]);
+
+  // Local tick timer for display
+  useEffect(() => {
+    if (!session || session.status === 'completed' || session.status === 'abandoned') return;
+    tickTimerRef.current = setInterval(() => {
+      if (session.status === 'active') {
+        setStudyElapsed(prev => prev + 1);
+      } else if (session.status === 'in_break') {
+        setBreakElapsed(prev => prev + 1);
+      }
+    }, 1000);
+    return () => clearInterval(tickTimerRef.current);
+  }, [session?.status, session?.id]);
+
+  // Heartbeat every 15 seconds while session is active
+  useEffect(() => {
+    if (!session || (session.status !== 'active' && session.status !== 'in_break')) return;
+    heartbeatTimerRef.current = setInterval(async () => {
+      try {
+        const res = await api.heartbeatFocusSession(session.id, studyElapsed);
+        setSession(res.session);
+      } catch (_) {}
+    }, 15000);
+    return () => clearInterval(heartbeatTimerRef.current);
+  }, [session?.id, session?.status]);
+
+  async function startSession() {
+    setBusy(true); setError('');
+    try {
+      const ci = customInterval ? Number(customInterval) : null;
+      const res = await api.startFocusSession(null, null, ci);
+      setSession(res.session);
+      setStudyElapsed(Math.round(res.session.study_duration_seconds || 0));
+      setBreakElapsed(Math.round(res.session.break_duration_seconds || 0));
+    } catch (e) { setError(e.message); }
+    finally { setBusy(false); }
+  }
+
+  async function takeBreak() {
+    if (!session) return;
+    setBusy(true);
+    try {
+      const res = await api.startNovaBreak(session.id);
+      setSession(res.session);
+    } catch (e) { setError(e.message); }
+    finally { setBusy(false); }
+  }
+
+  async function endBreak() {
+    if (!session) return;
+    setBusy(true);
+    try {
+      const res = await api.endNovaBreak(session.id);
+      setSession(res.session);
+    } catch (e) { setError(e.message); }
+    finally { setBusy(false); }
+  }
+
+  async function completeSession() {
+    if (!session) return;
+    setBusy(true);
+    try {
+      const res = await api.completeFocusSession(session.id);
+      setSession(res.session);
+      clearInterval(heartbeatTimerRef.current);
+      clearInterval(tickTimerRef.current);
+    } catch (e) { setError(e.message); }
+    finally { setBusy(false); }
+  }
+
+  async function abandonSession() {
+    if (!session) return;
+    setBusy(true);
+    try {
+      const res = await api.abandonFocusSession(session.id);
+      setSession(res.session);
+      clearInterval(heartbeatTimerRef.current);
+      clearInterval(tickTimerRef.current);
+    } catch (e) { setError(e.message); }
+    finally { setBusy(false); }
+  }
+
+  function resetSession() {
+    setSession(null);
+    setStudyElapsed(0);
+    setBreakElapsed(0);
+    setError('');
+  }
+
+  const fmt = (s) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
+  const studyLimitSec = (session?.study_interval_minutes || 45) * 60;
+  const studyPct = Math.min(100, (studyElapsed / studyLimitSec) * 100);
+  const isBreakDue = studyElapsed >= studyLimitSec && session?.status === 'active';
+
+  if (!user) return (
+    <div className="quiz-card panel">
+      <h2>Focus Mode</h2>
+      <p className="muted">Sign in to start a distraction-minimizing study session.</p>
+      <Button onClick={() => setPage('Sign Up / Login')}>Sign in <ArrowRight size={15}/></Button>
+    </div>
+  );
+
+  const isEnded = session && (session.status === 'completed' || session.status === 'abandoned');
+
+  return (
+    <>
+      <SectionTitle
+        eyebrow="DISTRACTION-FREE LEARNING"
+        title="Focus Mode."
+        sub="Structured study sessions with category-aware timers and NovaBreak."
+      />
+
+      {error && <div className="panel" style={{padding: 14, marginBottom: 16, color: '#ff9eac'}}>{error}</div>}
+
+      {!session && (
+        <div className="panel" style={{padding: 32, maxWidth: 520, margin: '0 auto', textAlign: 'center'}}>
+          <div style={{width: 56, height: 56, borderRadius: '50%', background: 'rgba(140,124,255,0.12)', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', marginBottom: 16}}>
+            <Timer size={26} style={{color: '#8c7cff'}}/>
+          </div>
+          <h2 style={{margin: '0 0 6px'}}>Start a Focus Session</h2>
+          <p className="muted" style={{marginBottom: 20}}>Your study timer and break duration are set based on your education category. You can optionally set a custom study interval (15–90 minutes).</p>
+          <div style={{display: 'flex', gap: 10, justifyContent: 'center', alignItems: 'center', marginBottom: 16}}>
+            <label style={{fontSize: 13}}>Custom study interval (min):
+              <input
+                type="number" min="15" max="90" placeholder="e.g. 30"
+                value={customInterval} onChange={e => setCustomInterval(e.target.value)}
+                style={{width: 80, marginLeft: 8, padding: '6px 8px', borderRadius: 6, border: '1px solid rgba(255,255,255,0.12)', background: 'rgba(255,255,255,0.04)', color: '#fff'}}
+              />
+            </label>
+          </div>
+          <Button onClick={startSession} disabled={busy}>
+            {busy ? 'Starting…' : 'Begin Focus Session'} <ArrowRight size={15}/>
+          </Button>
+        </div>
+      )}
+
+      {session && !isEnded && (
+        <div className="panel" style={{padding: 28, maxWidth: 580, margin: '0 auto'}}>
+          <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20, flexWrap: 'wrap', gap: 12}}>
+            <div>
+              <span className="eyebrow" style={{color: session.status === 'in_break' ? '#80e0c1' : '#8c7cff'}}>
+                {session.status === 'in_break' ? 'NOVABREAK ACTIVE' : 'STUDY SESSION ACTIVE'}
+              </span>
+              <h3 style={{margin: '4px 0 0'}}>{session.category?.replace(/_/g, ' ')} · {session.study_interval_minutes} min study / {session.break_duration_minutes} min break</h3>
+            </div>
+            <span className={`tag ${session.status === 'in_break' ? 'tag-easy' : 'tag-medium'}`} style={{textTransform: 'capitalize'}}>
+              {session.status === 'in_break' ? 'On Break' : 'Studying'}
+            </span>
+          </div>
+
+          {/* Timer display */}
+          <div style={{textAlign: 'center', padding: '20px 0'}}>
+            <div style={{fontSize: 48, fontWeight: 700, fontFamily: 'monospace', color: session.status === 'in_break' ? '#80e0c1' : '#a89bff', letterSpacing: 2}}>
+              {session.status === 'in_break' ? fmt(breakElapsed) : fmt(studyElapsed)}
+            </div>
+            <p className="muted" style={{margin: '6px 0 0', fontSize: 13}}>
+              {session.status === 'in_break'
+                ? `Break time · Study: ${fmt(studyElapsed)}`
+                : `Study time · Breaks: ${session.break_count || 0} (${fmt(breakElapsed)} total)`}
+            </p>
+          </div>
+
+          {/* Study progress bar */}
+          <div style={{marginBottom: 20}}>
+            <div style={{display: 'flex', justifyContent: 'space-between', fontSize: 12, marginBottom: 4}}>
+              <span className="muted">Study Progress</span>
+              <b>{Math.round(studyPct)}%</b>
+            </div>
+            <div className="progress-track" style={{height: 8}}>
+              <i style={{width: `${studyPct}%`, background: isBreakDue ? '#ffc879' : '#8c7cff'}}/>
+            </div>
+            {isBreakDue && (
+              <div style={{marginTop: 8, padding: '8px 14px', borderRadius: 8, background: 'rgba(255,200,121,0.1)', color: '#ffc879', fontSize: 13, display: 'flex', alignItems: 'center', gap: 8}}>
+                <AlertCircle size={16}/> Study interval complete. Take a NovaBreak to recharge!
+              </div>
+            )}
+          </div>
+
+          {/* Action buttons */}
+          <div style={{display: 'flex', gap: 10, flexWrap: 'wrap'}}>
+            {session.status === 'active' && (
+              <Button kind="soft" onClick={takeBreak} disabled={busy}>
+                <Coffee size={14} style={{marginRight: 4}}/> Take NovaBreak
+              </Button>
+            )}
+            {session.status === 'in_break' && (
+              <Button onClick={endBreak} disabled={busy}>
+                <Play size={14} style={{marginRight: 4}}/> End Break & Resume
+              </Button>
+            )}
+            <Button kind="outline" onClick={completeSession} disabled={busy}>
+              <Check size={14} style={{marginRight: 4}}/> Complete Session
+            </Button>
+            <Button kind="outline" onClick={abandonSession} disabled={busy} style={{color: '#ff9eac', borderColor: 'rgba(255,158,172,0.3)'}}>
+              <X size={14} style={{marginRight: 4}}/> Exit
+            </Button>
+          </div>
+
+          <div style={{marginTop: 16, fontSize: 12, color: '#b0b7c3', display: 'flex', alignItems: 'center', gap: 6}}>
+            <ShieldCheck size={13}/> Break time is excluded from your study duration. Heartbeat syncs every 15 seconds.
+          </div>
+        </div>
+      )}
+
+      {isEnded && (
+        <div className="panel" style={{padding: 28, maxWidth: 520, margin: '0 auto', textAlign: 'center'}}>
+          <div style={{width: 56, height: 56, borderRadius: '50%', background: session.status === 'completed' ? 'rgba(128,224,193,0.12)' : 'rgba(255,158,172,0.12)', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', marginBottom: 16}}>
+            {session.status === 'completed' ? <CheckCircle2 size={26} style={{color: '#80e0c1'}}/> : <X size={26} style={{color: '#ff9eac'}}/>}
+          </div>
+          <h2 style={{margin: '0 0 6px'}}>{session.status === 'completed' ? 'Session Complete!' : 'Session Ended'}</h2>
+          <p className="muted">
+            Study: <b>{fmt(studyElapsed)}</b> · Breaks: <b>{session.break_count || 0}</b> ({fmt(breakElapsed)})
+          </p>
+          <div style={{display: 'flex', gap: 10, justifyContent: 'center', marginTop: 16}}>
+            <Button onClick={resetSession}>Start New Session <ArrowRight size={15}/></Button>
+            <Button kind="outline" onClick={() => setPage('Journey')}>Return to Journey</Button>
+          </div>
+        </div>
+      )}
+    </>
+  );
+}
+
+function GuardianDashboard({setPage}) {
+  const {user} = useData();
+  const [learners, setLearners] = useState([]);
+  const [selectedLearner, setSelectedLearner] = useState(null);
+  const [summary, setSummary] = useState(null);
+  const [reports, setReports] = useState([]);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const [notice, setNotice] = useState('');
+
+  useEffect(() => {
+    if (!user || user.role !== 'guardian') return;
+    api.getGuardianLearners().then(res => {
+      setLearners(res.learners || []);
+    }).catch(e => setError(e.message));
+  }, [user]);
+
+  async function selectLearner(learner) {
+    setSelectedLearner(learner);
+    setSummary(null); setReports([]); setError('');
+    setBusy(true);
+    try {
+      const [sumRes, repRes] = await Promise.allSettled([
+        api.getGuardianLearnerSummary(learner.user_id),
+        api.getGuardianLearnerReports(learner.user_id),
+      ]);
+      if (sumRes.status === 'fulfilled') setSummary(sumRes.value);
+      if (repRes.status === 'fulfilled') setReports(repRes.value.reports || []);
+    } catch (e) { setError(e.message); }
+    finally { setBusy(false); }
+  }
+
+  async function handleGenerate() {
+    if (!selectedLearner) return;
+    setBusy(true); setNotice('');
+    try {
+      const res = await api.generateGuardianReport(selectedLearner.user_id);
+      setNotice('Weekly report generated successfully.');
+      setReports(prev => [res.report, ...prev]);
+    } catch (e) { setError(e.message); }
+    finally { setBusy(false); }
+  }
+
+  async function handleSend(reportId) {
+    if (!selectedLearner) return;
+    setBusy(true); setNotice('');
+    try {
+      await api.sendGuardianReport(selectedLearner.user_id, reportId);
+      setNotice('Report emailed to guardian successfully.');
+    } catch (e) { setError(e.message); }
+    finally { setBusy(false); }
+  }
+
+  if (!user) return (
+    <div className="quiz-card panel">
+      <h2>Guardian Dashboard</h2>
+      <p className="muted">Sign in with a guardian account to view learner progress.</p>
+      <Button onClick={() => setPage('Sign Up / Login')}>Sign in <ArrowRight size={15}/></Button>
+    </div>
+  );
+
+  if (user.role !== 'guardian') return (
+    <div className="quiz-card panel">
+      <h2>Guardian Dashboard</h2>
+      <p className="muted">This section is available to verified guardian accounts. Your current role is <b>{user.role}</b>.</p>
+      <Button kind="outline" onClick={() => setPage('Student Dashboard')}>Back to Dashboard</Button>
+    </div>
+  );
+
+  return (
+    <>
+      <SectionTitle
+        eyebrow="GUARDIAN EXPERIENCE"
+        title="Your Learners."
+        sub="View learning progress, study time (breaks excluded), and demonstrated mastery for linked learners."
+      />
+
+      {error && <div className="panel" style={{padding: 14, marginBottom: 16, color: '#ff9eac'}}>{error}</div>}
+      {notice && <div className="panel" style={{padding: 12, marginBottom: 16, background: 'rgba(128,224,193,0.08)', color: '#80e0c1', fontSize: 13}}>{notice}</div>}
+
+      <div style={{display: 'flex', gap: 20, flexWrap: 'wrap', alignItems: 'flex-start'}}>
+        {/* Learner list */}
+        <div className="panel" style={{padding: 20, minWidth: 260, flex: '0 0 280px'}}>
+          <div className="eyebrow">LINKED LEARNERS</div>
+          {learners.length === 0 && <p className="muted" style={{marginTop: 12}}>No linked learners found.</p>}
+          <div style={{marginTop: 12, display: 'flex', flexDirection: 'column', gap: 8}}>
+            {learners.map(l => (
+              <button
+                key={l.user_id}
+                className={`mastery-row ${selectedLearner?.user_id === l.user_id ? 'active' : ''}`}
+                onClick={() => selectLearner(l)}
+                style={{cursor: 'pointer', background: selectedLearner?.user_id === l.user_id ? 'rgba(140,124,255,0.1)' : 'rgba(255,255,255,0.03)', padding: '12px 14px', borderRadius: 8, border: 'none', textAlign: 'left', width: '100%', color: 'inherit'}}
+              >
+                <div className="avatar" style={{width: 34, height: 34, fontSize: 14}}>{(l.username || 'L').charAt(0).toUpperCase()}</div>
+                <span className="mastery-info">
+                  <b>{l.username || `Learner ${l.user_id}`}</b>
+                  <small>{l.education_category?.replace(/_/g, ' ') || 'Learner'}{l.study_minutes != null ? ` · ${l.study_minutes} min studied` : ''}</small>
+                </span>
+                <ChevronRight size={14}/>
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* Learner detail */}
+        {selectedLearner && (
+          <div style={{flex: 1, minWidth: 320}}>
+            {busy && !summary && <p className="muted">Loading learner data…</p>}
+
+            {summary && (
+              <>
+                <div className="panel" style={{padding: 20, marginBottom: 16}}>
+                  <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 12}}>
+                    <div>
+                      <span className="eyebrow" style={{color: '#8c7cff'}}>LEARNER SUMMARY</span>
+                      <h3 style={{margin: '4px 0 0'}}>{summary.username || `Learner ${selectedLearner.user_id}`}</h3>
+                      <p className="muted" style={{margin: '4px 0 0', fontSize: 13}}>
+                        {summary.education_category?.replace(/_/g, ' ')} · Active journeys: {summary.active_journeys ?? 0}
+                      </p>
+                    </div>
+                  </div>
+
+                  {/* Stats row */}
+                  <div className="stats-grid" style={{marginTop: 16, gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))'}}>
+                    <div className="stat-card">
+                      <div className="stat-icon violet"><Clock3 size={16}/></div>
+                      <div className="stat-label">Study Time</div>
+                      <div className="stat-value">{summary.study_minutes ?? 0} min</div>
+                      <div className="stat-change"><ShieldCheck size={12}/> Breaks excluded</div>
+                    </div>
+                    <div className="stat-card">
+                      <div className="stat-icon mint"><Trophy size={16}/></div>
+                      <div className="stat-label">Mastery Topics</div>
+                      <div className="stat-value">{summary.demonstrated_mastery_count ?? 0}</div>
+                      <div className="stat-change"><ArrowUpRight size={12}/> Demonstrated</div>
+                    </div>
+                    <div className="stat-card">
+                      <div className="stat-icon amber"><Target size={16}/></div>
+                      <div className="stat-label">Topics Assessed</div>
+                      <div className="stat-value">{summary.topics_assessed ?? 0}</div>
+                      <div className="stat-change"><TrendingUp size={12}/> Total</div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Topic proficiencies */}
+                {summary.topic_proficiencies?.length > 0 && (
+                  <div className="panel" style={{padding: 20, marginBottom: 16}}>
+                    <div className="eyebrow">TOPIC PROFICIENCY</div>
+                    <div className="mastery-list" style={{marginTop: 12}}>
+                      {summary.topic_proficiencies.map(tp => (
+                        <div className="mastery-row" key={tp.topic} style={{padding: '10px 0'}}>
+                          <span className="mastery-icon" style={{background: tp.is_demonstrated ? '#80e0c124' : '#ffc87924', color: tp.is_demonstrated ? '#80e0c1' : '#ffc879', minWidth: 30, minHeight: 30}}>
+                            {tp.is_demonstrated ? <Check size={14}/> : <Target size={14}/>}
+                          </span>
+                          <span className="mastery-info">
+                            <b>{tp.topic}</b>
+                            <small>{tp.is_demonstrated ? 'Demonstrated Mastery' : tp.assessment_status || 'Developing'}</small>
+                            <span className="progress-track"><i style={{width: `${Math.round((tp.estimate || 0) * 100)}%`}}/></span>
+                          </span>
+                          <strong>{Math.round((tp.estimate || 0) * 100)}%</strong>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Reports section */}
+                <div className="panel" style={{padding: 20}}>
+                  <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8}}>
+                    <div className="eyebrow">WEEKLY REPORTS</div>
+                    <Button kind="soft" onClick={handleGenerate} disabled={busy}>
+                      <FileText size={14} style={{marginRight: 4}}/> Generate Report
+                    </Button>
+                  </div>
+                  {reports.length === 0 && <p className="muted" style={{marginTop: 12}}>No reports generated yet.</p>}
+                  <div style={{marginTop: 12, display: 'flex', flexDirection: 'column', gap: 8}}>
+                    {reports.map(r => (
+                      <div key={r.id} style={{padding: '12px 14px', background: 'rgba(255,255,255,0.03)', borderRadius: 8, display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8}}>
+                        <div>
+                          <b style={{fontSize: 13}}>Report #{r.id}</b>
+                          <small className="muted" style={{display: 'block'}}>{r.period_start} — {r.period_end}</small>
+                        </div>
+                        <Button kind="soft" onClick={() => handleSend(r.id)} disabled={busy} style={{fontSize: 12, padding: '5px 12px'}}>
+                          <Send size={12} style={{marginRight: 4}}/> Email Report
+                        </Button>
+                      </div>
+                    ))}
+                  </div>
+
+                  <div style={{marginTop: 16, fontSize: 12, color: '#b0b7c3', display: 'flex', alignItems: 'center', gap: 6}}>
+                    <ShieldCheck size={13}/> Learner credentials and raw telemetry are never exposed to guardians.
+                  </div>
+                </div>
+              </>
+            )}
+          </div>
+        )}
+      </div>
+    </>
+  );
+}
+
 function Modal({topic,onClose}) {
   if(!topic)return null;
   return <div className="modal-backdrop" onClick={onClose}><div className="topic-modal" onClick={e=>e.stopPropagation()}><button className="icon-btn modal-close" onClick={onClose}><X size={17}/></button><div className="auth-icon"><Target size={23}/></div><div className="eyebrow">TOPIC INSIGHT</div><h2>{topic.name}</h2><p className="muted">{topic.state||'Personalized overview'}</p><div className="modal-score"><b>{topic.value??68}%</b><span>current mastery</span></div><div className="progress-track"><i style={{width:(topic.value??68)+'%'}}/></div><p className="modal-copy">Keep building with short practice sessions and resources selected for your current level.</p><Button block onClick={onClose}>Got it <Check size={15}/></Button></div></div>;
 }
 function AppContent() {
   const [user,setUser]=useState(()=>api.session.get()?.user||null);
-  const [page,setPage]=useState(()=>api.session.get()?'Student Dashboard':'Landing Page'),[collapsed,setCollapsed]=useState(false),[course,setCourse]=useState(sampleResources[0]),[modal,setModal]=useState(null),[quizScore,setQuizScore]=useState(null),[toast,setToast]=useState('');
+  const [page,setPage]=useBrowserNavigation(api.session.get()?'Student Dashboard':'Landing Page');
+  const [collapsed,setCollapsed]=useState(false),[course,setCourse]=useState(sampleResources[0]),[modal,setModal]=useState(null),[quizScore,setQuizScore]=useState(null),[toast,setToast]=useState('');
   const guestData={courses:sampleResources,recs:sampleResources,topics:sampleTopics,stats:null,profile:null,history:[],recMeta:null,recError:''};
   const [data,setData]=useState(guestData);
   const loadAll=useCallback(async()=>{
-    const [c,r,p,g]=await Promise.allSettled([api.fetchAllCourses(),api.getRecommendations(),api.getProfile(),api.getProgress()]);
+    const [c,r,p,g,k]=await Promise.allSettled([api.fetchAllCourses(),api.getRecommendations(),api.getProfile(),api.getProgress(),api.getKnowledgeProfile()]);
     setData({
       courses:c.status==='fulfilled'?c.value.map(api.adaptCourse):[],
       recs:r.status==='fulfilled'?r.value.recommendations.map(api.adaptRecommendation):[],
@@ -344,6 +1724,7 @@ function AppContent() {
       recError:r.status==='rejected'?r.reason.message:'',
       topics:p.status==='fulfilled'?api.adaptMastery(p.value.topic_mastery).slice(0,5):[],
       profile:p.status==='fulfilled'?p.value:null,
+      knowledge:k.status==='fulfilled'?k.value:null,
       stats:g.status==='fulfilled'?api.buildStats(g.value):null,
       history:g.status==='fulfilled'?g.value.history:[],
     });
@@ -353,6 +1734,7 @@ function AppContent() {
     try{const r=await api.refreshRecommendations();setData(d=>({...d,recs:r.recommendations.map(api.adaptRecommendation),recMeta:r,recError:''}));}
     catch(e){setData(d=>({...d,recError:e.message}));}
   },[]);
+  const saveProfile=useCallback(async(profile)=>{const updated=await api.updateProfile(profile);setData(d=>({...d,profile:updated,topics:api.adaptMastery(updated.topic_mastery).slice(0,5)}));return updated;},[]);
   // Fire-and-forget activity logging; also refreshes stats/profile afterwards.
   const track=useCallback((courseId,eventType,seconds)=>{api.logActivity(courseId,eventType,seconds).then(()=>loadAll()).catch(()=>{});},[loadAll]);
   const signOut=useCallback(()=>{api.session.clear();setUser(null);setData(guestData);setPage('Landing Page');},[]);
@@ -365,7 +1747,7 @@ function AppContent() {
     api.setUnauthorizedHandler(()=>{setUser(null);setData(guestData);setPage('Sign Up / Login');showToast('Your session expired. Please sign in again.');});
     if(api.session.get())loadAll();
   },[]);
-  const ctx={...data,user,signIn,signUp,signInWithGoogle,signOut,openAuth,track,refreshRecs};
+  const ctx={...data,user,signIn,signUp,signInWithGoogle,signOut,openAuth,track,refreshRecs,saveProfile};
   const appPage=page!=='Landing Page'&&page!=='Sign Up / Login';
   function openCourse(item){setCourse(item);setPage('Course / Learning View');if(user&&item.id)track(item.id,'view');}
   async function markComplete(){
@@ -377,14 +1759,19 @@ function AppContent() {
     switch(page){
       case 'Landing Page':return <Landing setPage={setPage}/>;
       case 'Sign Up / Login':return <Auth setPage={setPage}/>;
+      case 'Onboarding':return <Onboarding setPage={setPage}/>;
       case 'Home':case 'Student Dashboard':return <Dashboard setPage={setPage} onOpen={openCourse} onTopic={setModal}/>;
       case 'Explore':case 'Explore Courses':return <Explore onOpen={openCourse}/>;
       case 'My Learning':return <><SectionTitle eyebrow="YOUR LEARNING SPACE" title="Keep your momentum." sub="Pick up where you left off and keep moving forward."/><div className="resource-grid">{(()=>{const seen=[...new Set(data.history.map(h=>h.course_id))].map(id=>data.courses.find(c=>c.id===id)).filter(Boolean);return(seen.length?seen:data.courses).slice(0,3);})().map(r=><ResourceCard key={r.id} item={r} onOpen={openCourse}/>)}</div><div className="panel my-learning-note"><BookOpen size={21}/><div><h3>Your learning path is taking shape.</h3><p>Complete a lesson or quiz to keep your progress moving.</p></div><Button onClick={()=>setPage('Explore')}>Explore more <ArrowRight size={15}/></Button></div></>;
       case 'Course / Learning View':return <CourseView course={course} onBack={()=>setPage('Explore')} onQuiz={()=>setPage('Quiz / Assessment')} onComplete={markComplete}/>;
       case 'Quiz / Assessment':return <Quiz course={course} onBack={()=>setPage('Course / Learning View')} onSubmit={res=>{setQuizScore(res.score);showToast(`Quiz saved: ${res.score}%`);loadAll();}}/>;
+      case 'Diagnostic':return <Diagnostic setPage={setPage}/>;
       case 'Learner Profile':case 'Profile':return <Profile onTopic={setModal}/>;
       case 'Recommendations':return <Recommendations onOpen={openCourse}/>;
+      case 'Learning Journey':case 'Journey':return <LearningJourneyView setPage={setPage}/>;
       case 'Progress':case 'Progress Analytics':return <Analytics/>;
+      case 'Focus Mode':return <FocusMode setPage={setPage}/>;
+      case 'Guardian Dashboard':return <GuardianDashboard setPage={setPage}/>;
       case 'How It Works / About':return <About setPage={setPage}/>;
       default:return <Dashboard setPage={setPage} onOpen={openCourse} onTopic={setModal}/>;
     }
